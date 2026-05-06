@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import { Search, UserPlus, Phone, MapPin, Edit, Trash2, MessageCircle, Mail, Calendar } from 'lucide-react';
+import { Search, UserPlus, Phone, MapPin, Edit, Trash2, MessageCircle } from 'lucide-react';
 import { Button } from '@/app/components/ui/button';
 import { Input } from '@/app/components/ui/input';
 import { Card } from '@/app/components/ui/card';
@@ -23,24 +23,10 @@ import { supabase } from '@/app/lib/supabase';
 import { toast } from 'sonner';
 import { projectId, publicAnonKey } from '/utils/supabase/info';
 import { useUserProfile } from '@/app/hooks/useUserProfile';
+import { useContacts, type Contact } from '@/app/hooks/useContacts';
+import { useUnits } from '@/app/hooks/useUnits';
+import { useDebouncedValue } from '@/app/hooks/useDebouncedValue';
 import { useAuth } from '../contexts/AuthContext';
-
-interface Contact {
-  id: string;
-  wa_id: string;
-  phone_number: string;
-  display_name: string;
-  first_name?: string;
-  last_name?: string;
-  unit_id: string;
-  situation: string;
-  created_at: string;
-}
-
-interface Unit {
-  id: number;
-  name: string;
-}
 
 export function ContactsModule() {
   const { contactId } = useParams<{ contactId?: string }>();
@@ -48,11 +34,12 @@ export function ContactsModule() {
   const { authUser } = useAuth();
   const accessToken = authUser?.accessToken || '';
 
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [filteredContacts, setFilteredContacts] = useState<Contact[]>([]);
-  const [units, setUnits] = useState<Unit[]>([]);
-  const [loading, setLoading] = useState(true);
+  // 🚀 Cache via React Query (substitui useState/useEffect/loadContacts/realtime)
+  const { contacts, isLoading: loading, refetch: refetchContacts } = useContacts();
+  const { units } = useUnits();
+
   const [searchTerm, setSearchTerm] = useState('');
+  const debouncedSearchTerm = useDebouncedValue(searchTerm, 300);
   const [unitFilter, setUnitFilter] = useState<string>('all');
   const [situationFilter, setSituationFilter] = useState<string>('all');
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -67,23 +54,6 @@ export function ContactsModule() {
   const canDelete = userProfile.isLoaded && userProfile.isAdmin;
   const canEditUnit = userProfile.isLoaded && userProfile.isAdmin;
 
-  useEffect(() => {
-    loadContacts();
-    loadUnits();
-
-    const channel = supabase
-      .channel('contacts-changes')
-      .on('postgres_changes',
-        { event: '*', schema: 'public', table: 'contacts' },
-        () => loadContacts()
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-
   // 🔗 Deep link: abrir edição de contato via URL
   useEffect(() => {
     if (contactId && contacts.length > 0) {
@@ -96,76 +66,15 @@ export function ContactsModule() {
         navigate('/contacts', { replace: true });
       }
     }
-  }, [contactId, contacts]);
+  }, [contactId, contacts, navigate]);
 
-  useEffect(() => {
-    filterContacts();
-  }, [contacts, searchTerm, unitFilter, situationFilter]);
+  // Filtro client-side memoizado (search debounced p/ não rodar a cada tecla)
+  const filteredContacts = useMemo(() => {
+    let result = contacts;
 
-  async function loadContacts() {
-    try {
-      setLoading(true);
-
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        setContacts([]);
-        setLoading(false);
-        return;
-      }
-
-      const token = session.access_token;
-
-      const endpoint = `https://${projectId}.supabase.co/functions/v1/make-server-844b77a1/api/contacts`;
-
-      const response = await fetch(endpoint, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${publicAnonKey}`,
-          'apikey': publicAnonKey,
-          'X-User-Token': token,
-        }
-      });
-
-      const result = await response.json();
-
-      if (!response.ok || !result.success) {
-        toast.error('Erro ao carregar contatos');
-        setContacts([]);
-        return;
-      }
-
-      setContacts(result.contacts || []);
-
-    } catch (error) {
-      toast.error('Erro ao carregar contatos');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function loadUnits() {
-    try {
-      const { data, error } = await supabase
-        .from('units')
-        .select('id, name')
-        .order('name');
-
-      if (error) {
-        return;
-      }
-
-      setUnits(data || []);
-    } catch (error) {
-    }
-  }
-
-  function filterContacts() {
-    let filtered = contacts;
-
-    if (searchTerm) {
-      const search = searchTerm.toLowerCase();
-      filtered = filtered.filter(contact =>
+    if (debouncedSearchTerm) {
+      const search = debouncedSearchTerm.toLowerCase();
+      result = result.filter(contact =>
         contact.display_name?.toLowerCase().includes(search) ||
         contact.first_name?.toLowerCase().includes(search) ||
         contact.last_name?.toLowerCase().includes(search) ||
@@ -175,15 +84,15 @@ export function ContactsModule() {
     }
 
     if (unitFilter !== 'all') {
-      filtered = filtered.filter(contact => String(contact.unit_id) === String(unitFilter));
+      result = result.filter(contact => String(contact.unit_id) === String(unitFilter));
     }
 
     if (situationFilter !== 'all') {
-      filtered = filtered.filter(contact => contact.situation === situationFilter);
+      result = result.filter(contact => contact.situation === situationFilter);
     }
 
-    setFilteredContacts(filtered);
-  }
+    return result;
+  }, [contacts, debouncedSearchTerm, unitFilter, situationFilter]);
 
   function getSituationBadgeColor(situation: string) {
     const colorMap: Record<string, string> = {
@@ -624,7 +533,7 @@ export function ContactsModule() {
         onOpenChange={setShowCreateDialog}
         onSuccess={() => {
           setShowCreateDialog(false);
-          loadContacts();
+          refetchContacts();
         }}
         accessToken={accessToken}
       />
@@ -638,7 +547,7 @@ export function ContactsModule() {
         onSuccess={() => {
           setShowEditDialog(false);
           navigate('/contacts', { replace: true });
-          loadContacts();
+          refetchContacts();
         }}
       />
 
@@ -651,7 +560,7 @@ export function ContactsModule() {
           onSuccess={() => {
             setShowDeleteDialog(false);
             setSelectedContact(null);
-            loadContacts();
+            refetchContacts();
           }}
         />
       )}

@@ -1,9 +1,8 @@
 import { LeadWithDetails, LeadStatus } from '../../types/database';
-import { User, Phone, Mail, Calendar, MapPin, Clock, Star, Award, RotateCcw } from 'lucide-react';
+import { Phone, Mail, MapPin, Clock, Star, Award, RotateCcw } from 'lucide-react';
 import { useDrag, useDrop } from 'react-dnd';
-import { Badge } from '../ui/badge';
 import { cn } from '../ui/utils';
-import { useRef } from 'react';
+import { memo, useCallback, useMemo, useRef } from 'react';
 import { FollowupStepper } from './FollowupStepper';
 
 // SVG inline do ícone WhatsApp (sem dependência externa)
@@ -155,7 +154,7 @@ interface LeadCardProps {
   onWhatsAppClick?: (lead: LeadWithDetails) => void;
 }
 
-function LeadCard({ lead, onLeadClick, onWhatsAppClick }: LeadCardProps) {
+function LeadCardImpl({ lead, onLeadClick, onWhatsAppClick }: LeadCardProps) {
   const [{ isDragging }, drag] = useDrag(() => ({
     type: ITEM_TYPE,
     item: { id: lead.id, currentStatus: lead.situacao },
@@ -303,6 +302,29 @@ function LeadCard({ lead, onLeadClick, onWhatsAppClick }: LeadCardProps) {
   );
 }
 
+// Memo: re-renderiza só quando algum campo load-bearing do lead muda
+const LeadCard = memo(LeadCardImpl, (a, b) => {
+  const la = a.lead;
+  const lb = b.lead;
+  return (
+    a.onLeadClick === b.onLeadClick &&
+    a.onWhatsAppClick === b.onWhatsAppClick &&
+    la.id === lb.id &&
+    la.situacao === lb.situacao &&
+    la.nome_completo === lb.nome_completo &&
+    la.telefone === lb.telefone &&
+    la.email === lb.email &&
+    la.origem === lb.origem &&
+    la.pontuacao === lb.pontuacao &&
+    la.classificacao === lb.classificacao &&
+    la.responsavel === lb.responsavel &&
+    la.created_at === lb.created_at &&
+    la.lastMessageDirection === lb.lastMessageDirection &&
+    la.followup_count === lb.followup_count &&
+    la.recently_reactivated === lb.recently_reactivated
+  );
+});
+
 // Componente da Coluna com drop zone
 interface KanbanColumnProps {
   status: LeadStatus;
@@ -312,7 +334,7 @@ interface KanbanColumnProps {
   onWhatsAppClick?: (lead: LeadWithDetails) => void;
 }
 
-function KanbanColumn({ status, leads, onLeadClick, onDrop, onWhatsAppClick }: KanbanColumnProps) {
+function KanbanColumnImpl({ status, leads, onLeadClick, onDrop, onWhatsAppClick }: KanbanColumnProps) {
   const ref = useRef<HTMLDivElement>(null);
   const config = statusConfig[status];
 
@@ -378,33 +400,47 @@ function KanbanColumn({ status, leads, onLeadClick, onDrop, onWhatsAppClick }: K
   );
 }
 
-export function LeadsKanban({ leads, onLeadClick, onStatusChange, onWhatsAppClick }: LeadsKanbanProps) {
-  const getLeadsByStatus = (status: LeadStatus) => {
-    return leads.filter(lead => 
-      lead.situacao?.toLowerCase() === status.toLowerCase()
-    );
-  };
+// Memo da coluna — só re-renderiza se mudar identity de leads ou handlers
+const KanbanColumn = memo(KanbanColumnImpl);
 
-  const handleDrop = (leadId: string, newStatus: LeadStatus) => {
+export function LeadsKanban({ leads, onLeadClick, onStatusChange, onWhatsAppClick }: LeadsKanbanProps) {
+  // 🚀 Agrupa por status uma única vez por mudança de leads (vs. 8x por render)
+  const leadsByStatus = useMemo(() => {
+    const map = {
+      novo: [] as LeadWithDetails[],
+      contato_feito: [] as LeadWithDetails[],
+      visita_agendada: [] as LeadWithDetails[],
+      visita_realizada: [] as LeadWithDetails[],
+      visita_cancelada: [] as LeadWithDetails[],
+      matriculado: [] as LeadWithDetails[],
+      base_fria: [] as LeadWithDetails[],
+      perdido: [] as LeadWithDetails[],
+    } satisfies Record<LeadStatus, LeadWithDetails[]>;
+    for (const lead of leads) {
+      const key = (lead.situacao?.toLowerCase() as LeadStatus | undefined);
+      if (key && key in map) {
+        (map as Record<LeadStatus, LeadWithDetails[]>)[key].push(lead);
+      }
+    }
+    return map;
+  }, [leads]);
+
+  const handleDrop = useCallback((leadId: string, newStatus: LeadStatus) => {
     onStatusChange(leadId, newStatus);
-  };
+  }, [onStatusChange]);
 
   return (
     <div className="inline-flex gap-3 sm:gap-4 pb-4 h-full min-w-full px-3 md:px-6 pt-3 md:pt-6">
-      {columns.map((status) => {
-        const statusLeads = getLeadsByStatus(status);
-
-        return (
-          <KanbanColumn
-            key={status}
-            status={status}
-            leads={statusLeads}
-            onLeadClick={onLeadClick}
-            onDrop={handleDrop}
-            onWhatsAppClick={onWhatsAppClick}
-          />
-        );
-      })}
+      {columns.map((status) => (
+        <KanbanColumn
+          key={status}
+          status={status}
+          leads={leadsByStatus[status]}
+          onLeadClick={onLeadClick}
+          onDrop={handleDrop}
+          onWhatsAppClick={onWhatsAppClick}
+        />
+      ))}
       {/* Spacer to ensure last column isn't clipped by scrollbar */}
       <div className="flex-shrink-0 w-6" aria-hidden />
     </div>

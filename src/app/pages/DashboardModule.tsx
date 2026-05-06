@@ -191,6 +191,8 @@ export function DashboardModule() {
     try {
 
       // Buscar dados em paralelo — paginação automática para tabelas grandes
+      // ⚡ tags removidas do paralelo: serão buscadas DEPOIS, filtradas pelos conversation_ids
+      // do período (antes carregava 100% da tabela e filtrava em JS — desperdício enorme).
       const [
         conversations,
         previousConversations,
@@ -201,7 +203,6 @@ export function DashboardModule() {
         units,
         allContacts,
         leads,
-        tags,
       ] = await Promise.all([
         // Conversas do período atual (com joins)
         fetchAll('conversations',
@@ -252,9 +253,6 @@ export function DashboardModule() {
         fetchAll('leads', 'id, situacao, origem, created_at, id_unidade',
           (q: any) => q.gte('created_at', startDate.toISOString()).lte('created_at', endDate.toISOString())
         ),
-
-        // Tags (filtro por período feito no JS)
-        fetchAll('conversation_tags', 'conversation_id, tag:tags(id, name, color)'),
       ]);
 
       const previousMessageCount = previousMessagesResult.count || 0;
@@ -294,9 +292,20 @@ export function DashboardModule() {
         calculateContactsByCategory(fAllContacts);
         calculateLeadsBySituation(fLeads);
         calculateLeadsByOrigem(fLeads);
-        // Filtrar tags apenas das conversas do período + unidade
-        const periodTags = tags.filter((t: any) => fConvIds.has(t.conversation_id));
-        calculateTagsByCount(periodTags);
+
+        // ⚡ Tags: busca server-side só das conversas do período+unidade.
+        // (Antes carregava 100% da tabela conversation_tags e filtrava em JS.)
+        const fConvIdsArr = Array.from(fConvIds) as number[];
+        if (fConvIdsArr.length > 0) {
+          const periodTags = await fetchAll<any>(
+            'conversation_tags',
+            'conversation_id, tag:tags(id, name, color)',
+            (q: any) => q.in('conversation_id', fConvIdsArr),
+          );
+          calculateTagsByCount(periodTags);
+        } else {
+          calculateTagsByCount([]);
+        }
       } else {
         // Limpar dados quando não há resultados
         setMetrics([]);
