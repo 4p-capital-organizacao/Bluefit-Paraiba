@@ -13,13 +13,13 @@ import { cn } from '../ui/utils';
 
 interface FollowupStepperProps {
   count: number;       // quantos templates já enviados
-  total?: number;      // total previsto (default 3)
+  total?: number;      // total previsto (default 2)
   className?: string;
   /** Indica se o lead está atualmente em base_fria (estilização extra) */
   exhausted?: boolean;
 }
 
-export function FollowupStepper({ count, total = 3, className, exhausted }: FollowupStepperProps) {
+export function FollowupStepper({ count, total = 2, className, exhausted }: FollowupStepperProps) {
   if (count <= 0 && !exhausted) return null; // não exibe se nunca foi tocado
 
   const safeCount = Math.min(Math.max(count, 0), total);

@@ -231,7 +231,7 @@ function LeadCard({ lead, onLeadClick, onWhatsAppClick }: LeadCardProps) {
             <span className="text-[9px] text-slate-500 uppercase font-semibold tracking-wide">Follow-ups</span>
             <FollowupStepper
               count={lead.followup_count || 0}
-              total={3}
+              total={2}
               exhausted={lead.situacao === 'base_fria'}
             />
           </div>

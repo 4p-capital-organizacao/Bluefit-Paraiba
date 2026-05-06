@@ -90,7 +90,7 @@ export function AutomationPanel() {
         resend_after_days: r.resend_after_days,
         template_name: r.template_name,
         template_language: r.template_language,
-        max_followup_envios: r.max_followup_envios ?? 3,
+        max_followup_envios: r.max_followup_envios ?? 2,
         move_to_base_fria_enabled: r.move_to_base_fria_enabled ?? true,
         move_to_base_fria_after_days: r.move_to_base_fria_after_days ?? 7,
       };
@@ -116,7 +116,7 @@ export function AutomationPanel() {
       draft.resend_after_days !== cur.resend_after_days ||
       draft.template_name !== cur.template_name ||
       draft.template_language !== cur.template_language ||
-      draft.max_followup_envios !== (cur.max_followup_envios ?? 3) ||
+      draft.max_followup_envios !== (cur.max_followup_envios ?? 2) ||
       draft.move_to_base_fria_enabled !== (cur.move_to_base_fria_enabled ?? true) ||
       draft.move_to_base_fria_after_days !== (cur.move_to_base_fria_after_days ?? 7)
     );
@@ -305,7 +305,7 @@ export function AutomationPanel() {
                       onChange={(e) => update(u.unit_id, { max_followup_envios: Number(e.target.value) })}
                       className="h-9 text-sm"
                     />
-                    <p className="text-[10px] text-[#9CA3AF] mt-0.5">3 envios = padrão</p>
+                    <p className="text-[10px] text-[#9CA3AF] mt-0.5">2 envios = padrão</p>
                   </div>
                   <div>
                     <Label className="text-[11px] text-[#6B7280]">Template</Label>
