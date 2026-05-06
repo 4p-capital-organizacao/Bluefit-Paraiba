@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { LeadWithDetails, LeadStatus, ConversationWithDetails } from '../types/database';
 import { supabase } from '../lib/supabase';
 import { projectId, publicAnonKey } from '/utils/supabase/info';
 import { useUserProfile } from '../hooks/useUserProfile';
+import { useLeads } from '../hooks/useLeads';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { LeadsKanban } from './crm/LeadsKanban';
 import { LeadsList } from './crm/LeadsList';
 import { LeadFormDialog } from './crm/LeadFormDialog';
@@ -25,12 +27,9 @@ type ViewMode = 'kanban' | 'list';
 type ScoreFilter = 'all' | 'sem_nota' | '0-20' | '21-40' | '41-60' | '61-80' | '81-100';
 
 export function CRMView() {
-  const [leads, setLeads] = useState<LeadWithDetails[]>([]);
-  const [filteredLeads, setFilteredLeads] = useState<LeadWithDetails[]>([]);
-  const [paginatedLeads, setPaginatedLeads] = useState<LeadWithDetails[]>([]);
-  const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('kanban');
   const [searchTerm, setSearchTerm] = useState('');
+  const debouncedSearchTerm = useDebouncedValue(searchTerm, 300);
   const [statusFilter, setStatusFilter] = useState<LeadStatus | 'all'>('all');
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>('all');
   const [showLeadForm, setShowLeadForm] = useState(false);
@@ -38,7 +37,7 @@ export function CRMView() {
   const [leadToDelete, setLeadToDelete] = useState<LeadWithDetails | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [showAllUnits, setShowAllUnits] = useState(false);
-  const [debugInfo, setDebugInfo] = useState<string | null>(null);
+  const [paginatedLeads, setPaginatedLeads] = useState<LeadWithDetails[]>([]);
   const ITEMS_PER_PAGE = 50;
 
   // 💬 Estado do fluxo WhatsApp CRM (simplificado)
@@ -50,16 +49,62 @@ export function CRMView() {
   // Hook de perfil do usuário
   const { profile: userProfile, loading: profileLoading, error: profileError } = useUserProfile();
 
-  // Carregar leads quando o perfil estiver pronto
-  useEffect(() => {
-    if (userProfile.isLoaded) {
-      loadLeads();
-    }
-  }, [userProfile.isLoaded, showAllUnits]);
+  // 🚀 Cache via React Query — substitui loadLeads/setLeads/setLoading
+  const {
+    leads,
+    debugInfo,
+    leadsToFix,
+    isLoading: loading,
+    isFetching,
+    refetch: refetchLeads,
+    updateLead,
+  } = useLeads({ profile: userProfile, showAllUnits });
 
+  // Auto-corrige situacao inválida no banco (fire-and-forget) quando detectado
   useEffect(() => {
-    filterLeads();
-  }, [leads, searchTerm, statusFilter, scoreFilter]);
+    if (leadsToFix.length === 0) return;
+    supabase
+      .from('leads')
+      .update({ situacao: 'novo' })
+      .in('id', leadsToFix)
+      .then(({ error }) => {
+        if (error) console.warn('[CRMView] auto-fix situacao falhou:', error);
+      });
+  }, [leadsToFix]);
+
+  // Filtros memoizados (search debounced p/ não rodar a cada tecla)
+  const filteredLeads = useMemo(() => {
+    let filtered: LeadWithDetails[] = leads;
+
+    if (debouncedSearchTerm.trim()) {
+      const search = debouncedSearchTerm.toLowerCase();
+      filtered = filtered.filter(lead =>
+        lead.nome_completo?.toLowerCase().includes(search) ||
+        lead.telefone?.includes(search) ||
+        lead.email?.toLowerCase().includes(search) ||
+        lead.origem?.toLowerCase().includes(search)
+      );
+    }
+
+    if (statusFilter !== 'all') {
+      filtered = filtered.filter(lead =>
+        lead.situacao?.toLowerCase() === statusFilter.toLowerCase()
+      );
+    }
+
+    if (scoreFilter !== 'all') {
+      filtered = filtered.filter(lead => {
+        const nota = lead.pontuacao;
+        if (scoreFilter === 'sem_nota') {
+          return nota === null || nota === undefined;
+        }
+        const [min, max] = scoreFilter.split('-').map(Number);
+        return nota !== null && nota !== undefined && nota >= min && nota <= max;
+      });
+    }
+
+    return filtered;
+  }, [leads, debouncedSearchTerm, statusFilter, scoreFilter]);
 
   // =============================================
   // 🔴 REALTIME: Escutar novas mensagens para atualizar bolinha vermelha
@@ -102,7 +147,7 @@ export function CRMView() {
     leads.map(l => `${l.id}:${l.id_contact || ''}`).join('|')
   ]);
 
-  // Subscription Realtime na tabela messages (INSERT)
+  // Subscription Realtime na tabela messages (INSERT) — atualiza lastMessageDirection via cache
   useEffect(() => {
     const channel = supabase
       .channel('crm-kanban-messages')
@@ -116,278 +161,60 @@ export function CRMView() {
         (payload) => {
           const newMsg = payload.new as { conversation_id: string; direction: string };
           const leadId = convToLeadMapRef.current[newMsg.conversation_id];
-          if (!leadId) return; // Mensagem não pertence a nenhum lead do CRM
+          if (!leadId) return;
 
-
-          setLeads(prev => prev.map(lead =>
-            lead.id === leadId
-              ? { ...lead, lastMessageDirection: newMsg.direction as 'inbound' | 'outbound' }
-              : lead
-          ));
+          updateLead(leadId, {
+            lastMessageDirection: newMsg.direction as 'inbound' | 'outbound',
+          });
         }
       )
-      .subscribe((status, err) => {
-        if (err) {
-        } else {
-        }
-      });
+      .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []); // Subscription única, o callback usa ref que sempre está atualizado
+  }, [updateLead]);
 
-  const loadLeads = useCallback(async () => {
-    try {
-      setLoading(true);
-      setDebugInfo(null);
-
-      if (!userProfile.isLoaded) {
-        setLoading(false);
-        return;
-      }
-
-      const { id_unidade, isAdmin, id_cargo } = userProfile;
-      const unitIds = userProfile.unitIds;
-      const isFullAdmin = userProfile.isFullAdmin;
-
-      let query = supabase
-        .from('leads')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      // Apenas Administrador (isFullAdmin) pode ver todas as unidades
-      const shouldFilterByUnit = !isFullAdmin || (isFullAdmin && !showAllUnits);
-
-      if (shouldFilterByUnit && unitIds.length > 0) {
-        // Filtrar por TODAS as unidades do usuário (multi-unidade)
-        const unitFilters = unitIds.map(id => `id_unidade.eq.${id}`).join(',');
-        query = query.or(`${unitFilters},id_unidade.is.null`);
-      } else if (shouldFilterByUnit && id_unidade != null) {
-        // Fallback: filtrar pela unidade principal do profiles
-        query = query.or(`id_unidade.eq.${id_unidade},id_unidade.is.null`);
-      } else if (!isFullAdmin && unitIds.length === 0 && id_unidade == null) {
-        query = query.is('id_unidade', null);
-      } else {
-      }
-
-      const { data: leadsData, error: leadsError } = await query;
-
-      if (leadsError) {
-        throw leadsError;
-      }
-
-      const totalLeads = leadsData?.length || 0;
-      const unitNamesStr = unitIds.length > 0
-        ? Object.values(userProfile.unitNames).join(', ')
-        : userProfile.unitName || String(id_unidade);
-      const debugMsg = shouldFilterByUnit && (unitIds.length > 0 || id_unidade != null)
-        ? `Mostrando ${totalLeads} leads de ${unitIds.length > 1 ? `${unitIds.length} unidades` : `unidade ${unitNamesStr}`}`
-        : isFullAdmin
-          ? `Admin: mostrando todos os ${totalLeads} leads`
-          : `Mostrando ${totalLeads} leads (sem unidade definida)`;
-      setDebugInfo(debugMsg);
-
-      if (!leadsData || leadsData.length === 0) {
-        setLeads([]);
-        setLoading(false);
-        return;
-      }
-
-      const validStatuses = ['novo', 'contato_feito', 'visita_agendada', 'visita_realizada', 'visita_cancelada', 'matriculado', 'base_fria', 'perdido'];
-
-      // IDs de leads que precisam de correção no banco
-      const leadsToFix: string[] = [];
-
-      const enrichedLeads = leadsData.map(lead => {
-        const originalSituacao = lead.situacao;
-        const isValid = originalSituacao && validStatuses.includes(originalSituacao.toLowerCase());
-        
-        if (!isValid) {
-          leadsToFix.push(lead.id);
-        }
-
-        return {
-          ...lead,
-          situacao: isValid
-            ? originalSituacao.toLowerCase() as LeadStatus
-            : 'novo' as LeadStatus,
-          lastMessageDirection: null as 'inbound' | 'outbound' | null,
-        };
-      });
-
-      // Corrigir leads com situacao NULL/inválida diretamente no banco (fire-and-forget)
-      if (leadsToFix.length > 0) {
-        supabase
-          .from('leads')
-          .update({ situacao: 'novo' })
-          .in('id', leadsToFix)
-          .then(({ error }) => {
-            if (error) {
-            } else {
-            }
-          });
-      }
-
-      // Setar leads imediatamente para renderizar cards
-      setLeads(enrichedLeads);
-      setLoading(false); // Desbloquear renderização dos cards
-
-      // ── 🔄 H2.2: enriquecer com follow-up summary (count + reactivated) em BATCH ──
-      try {
-        const leadIds = enrichedLeads.map(l => l.id);
-        if (leadIds.length > 0) {
-          const { data: summary } = await supabase
-            .from('lead_followup_summary')
-            .select('lead_id, followup_count, reactivated_at, recently_reactivated')
-            .in('lead_id', leadIds);
-
-          if (summary && summary.length > 0) {
-            const byId = new Map(summary.map((s: any) => [s.lead_id, s]));
-            setLeads(prev => prev.map(l => {
-              const s = byId.get(l.id);
-              return s
-                ? { ...l, followup_count: s.followup_count, reactivated_at: s.reactivated_at, recently_reactivated: s.recently_reactivated }
-                : l;
-            }));
-          }
-        }
-      } catch (e) {
-        // Não quebra renderização se a view falhar
-        console.warn('[CRMView] lead_followup_summary fetch falhou:', e);
-      }
-
-      // ── 🚀 OTIMIZAÇÃO: Buscar direção da última mensagem em BATCH (async, não bloqueia renderização) ──
-      try {
-        const leadsWithContact = enrichedLeads.filter(l => l.id_contact);
-        if (leadsWithContact.length > 0) {
-          const contactIds = leadsWithContact.map(l => l.id_contact!);
-          
-          // Buscar conversas dos contatos
-          const { data: conversations } = await supabase
-            .from('conversations')
-            .select('id, contact_id')
-            .in('contact_id', contactIds);
-
-          if (conversations && conversations.length > 0) {
-            const conversationIds = conversations.map(c => c.id);
-            
-            // 🚀 OTIMIZAÇÃO: Buscar TODAS as últimas mensagens em 1 query usando window function
-            // Antes: N queries (1 por conversa) → Agora: 1 query total
-            const { data: lastMessages } = await supabase
-              .from('messages')
-              .select('conversation_id, direction, sent_at')
-              .in('conversation_id', conversationIds)
-              .order('sent_at', { ascending: false });
-            
-            // Filtrar apenas a última mensagem de cada conversa (client-side)
-            const lastMsgByConv: Record<string, string> = {};
-            if (lastMessages) {
-              for (const msg of lastMessages) {
-                if (!lastMsgByConv[msg.conversation_id]) {
-                  lastMsgByConv[msg.conversation_id] = msg.direction;
-                }
-              }
-            }
-
-            // Mapa: contact_id → direction da última mensagem
-            const contactDirMap: Record<string, string> = {};
-            for (const conv of conversations) {
-              const direction = lastMsgByConv[conv.id];
-              if (direction) {
-                contactDirMap[conv.contact_id] = direction;
-              }
-            }
-
-            // Verificar se algum lead tem mensagem inbound
-            let hasChanges = false;
-            const updatedLeads = enrichedLeads.map(lead => {
-              if (lead.id_contact && contactDirMap[lead.id_contact]) {
-                hasChanges = true;
-                return { ...lead, lastMessageDirection: contactDirMap[lead.id_contact] as 'inbound' | 'outbound' };
-              }
-              return lead;
-            });
-
-            // Só atualizar estado se houver mudanças
-            if (hasChanges) {
-              setLeads(updatedLeads);
-            }
-          }
-        }
-      } catch (msgError) {
-      }
-
-    } catch (error) {
-      toast.error('Erro ao carregar leads');
-      setLoading(false);
-    }
-  }, [userProfile, showAllUnits]);
-
-  function filterLeads() {
-    let filtered = [...leads];
-
-    if (searchTerm.trim()) {
-      const search = searchTerm.toLowerCase();
-      filtered = filtered.filter(lead =>
-        lead.nome_completo?.toLowerCase().includes(search) ||
-        lead.telefone?.includes(search) ||
-        lead.email?.toLowerCase().includes(search) ||
-        lead.origem?.toLowerCase().includes(search)
-      );
-    }
-
-    if (statusFilter !== 'all') {
-      filtered = filtered.filter(lead =>
-        lead.situacao?.toLowerCase() === statusFilter.toLowerCase()
-      );
-    }
-
-    if (scoreFilter !== 'all') {
-      filtered = filtered.filter(lead => {
-        const nota = lead.pontuacao;
-        if (scoreFilter === 'sem_nota') {
-          return nota === null || nota === undefined;
-        }
-        const [min, max] = scoreFilter.split('-').map(Number);
-        return nota !== null && nota !== undefined && nota >= min && nota <= max;
-      });
-    }
-
-    setFilteredLeads(filtered);
-  }
-
-  function handleLeadClick(lead: LeadWithDetails) {
+  const handleLeadClick = useCallback((lead: LeadWithDetails) => {
     setSelectedLead(lead);
     setShowLeadForm(true);
-  }
+  }, []);
 
   function handleNewLead() {
     setSelectedLead(null);
     setShowLeadForm(true);
   }
 
-  async function handleStatusChange(leadId: string, newStatus: LeadStatus) {
+  // 🚀 Update otimista: muta o cache antes da resposta do banco; reverte se falhar.
+  const handleStatusChange = useCallback(async (leadId: string, newStatus: LeadStatus) => {
+    const lead = leads.find(l => l.id === leadId);
+    if (!lead) {
+      toast.error('Lead não encontrado');
+      return;
+    }
+
+    const oldStatus = lead.situacao;
+    const oldDataPrimeiroContato = lead.data_primeiro_contato;
+    const shouldStampPrimeiroContato =
+      oldStatus === 'novo' && newStatus !== 'novo' && !lead.data_primeiro_contato;
+
+    // 1. Otimismo: atualiza UI imediatamente
+    updateLead(leadId, {
+      situacao: newStatus,
+      ...(shouldStampPrimeiroContato ? { data_primeiro_contato: new Date().toISOString() } : {}),
+    });
+
     try {
-      const lead = leads.find(l => l.id === leadId);
-      if (!lead) {
-        toast.error('Lead não encontrado');
-        return;
-      }
-
-      const oldStatus = lead.situacao;
-
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
+        // Reverte
+        updateLead(leadId, { situacao: oldStatus, data_primeiro_contato: oldDataPrimeiroContato });
         toast.error('Usuário não autenticado');
         return;
       }
 
-      const updateData: any = {
-        situacao: newStatus,
-      };
-
-      if (oldStatus === 'novo' && newStatus !== 'novo' && !lead.data_primeiro_contato) {
+      const updateData: any = { situacao: newStatus };
+      if (shouldStampPrimeiroContato) {
         updateData.data_primeiro_contato = new Date().toISOString();
       }
 
@@ -396,9 +223,15 @@ export function CRMView() {
         .update(updateData)
         .eq('id', leadId);
 
-      if (updateError) throw updateError;
+      if (updateError) {
+        // Reverte
+        updateLead(leadId, { situacao: oldStatus, data_primeiro_contato: oldDataPrimeiroContato });
+        toast.error('Erro ao atualizar status');
+        return;
+      }
 
-      const { error: historyError } = await supabase
+      // Histórico (não-bloqueante)
+      supabase
         .from('lead_history')
         .insert({
           lead_id: leadId,
@@ -406,17 +239,18 @@ export function CRMView() {
           field_changed: 'situacao',
           old_value: oldStatus || null,
           new_value: newStatus,
+        })
+        .then(({ error }) => {
+          if (error) console.warn('[CRMView] lead_history insert falhou:', error);
         });
 
-      if (historyError) {
-      }
-
       toast.success('Status atualizado com sucesso!');
-      loadLeads();
     } catch (error) {
+      // Reverte
+      updateLead(leadId, { situacao: oldStatus, data_primeiro_contato: oldDataPrimeiroContato });
       toast.error('Erro ao atualizar status');
     }
-  }
+  }, [leads, updateLead]);
 
   // =============================================
   // 💬 WHATSAPP CRM FLOW (simplificado)
@@ -424,7 +258,7 @@ export function CRMView() {
   // Se lead legado (sem contato), faz onboarding automático sem template
   // =============================================
 
-  async function handleWhatsAppClick(lead: LeadWithDetails) {
+  const handleWhatsAppClick = useCallback(async (lead: LeadWithDetails) => {
     if (!lead.telefone) {
       toast.error('Este lead não possui telefone cadastrado');
       return;
@@ -527,7 +361,7 @@ export function CRMView() {
     } finally {
       setWhatsappLoading(false);
     }
-  }
+  }, [userProfile.id_unidade]);
 
   function handleCloseChatModal() {
     setCrmChatConversation(null);
@@ -548,7 +382,7 @@ export function CRMView() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, statusFilter, scoreFilter]);
+  }, [debouncedSearchTerm, statusFilter, scoreFilter]);
 
   const totalPages = Math.ceil(filteredLeads.length / ITEMS_PER_PAGE);
   const startItem = (currentPage - 1) * ITEMS_PER_PAGE + 1;
@@ -761,11 +595,11 @@ export function CRMView() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => loadLeads()}
+          onClick={() => refetchLeads()}
           className="h-7 w-7 p-0 text-slate-500 hover:text-slate-700 ml-auto flex-shrink-0"
           title="Recarregar leads"
         >
-          <RefreshCw className={cn("w-3.5 h-3.5", loading && "animate-spin")} />
+          <RefreshCw className={cn("w-3.5 h-3.5", (loading || isFetching) && "animate-spin")} />
         </Button>
       </div>
     );
@@ -965,7 +799,7 @@ export function CRMView() {
         open={showLeadForm}
         onOpenChange={setShowLeadForm}
         lead={selectedLead}
-        onSuccess={loadLeads}
+        onSuccess={() => refetchLeads()}
         userProfile={userProfile}
       />
 
@@ -975,7 +809,7 @@ export function CRMView() {
           open={true}
           onOpenChange={(open) => { if (!open) setLeadToDelete(null); }}
           lead={leadToDelete}
-          onSuccess={loadLeads}
+          onSuccess={() => refetchLeads()}
         />
       )}
 

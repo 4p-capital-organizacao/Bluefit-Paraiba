@@ -43,6 +43,22 @@ export const queryClient = new QueryClient({
 });
 
 /**
+ * ⏱️ STALE_TIMES por domínio
+ *
+ * Cada hook escolhe o staleTime adequado para os dados que carrega:
+ * - Estáticos (units, cargos): 30 min
+ * - Histórico/agregado (dashboard): 10 min
+ * - Listas operacionais (contatos, leads, conversas): 60 s
+ * - Detalhe sob edição: 30 s
+ */
+export const STALE_TIMES = {
+  static: 30 * 60 * 1000,
+  dashboard: 10 * 60 * 1000,
+  list: 60 * 1000,
+  detail: 30 * 1000,
+} as const;
+
+/**
  * 🔑 Query Keys - Centralizar as keys para facilitar invalidação
  */
 export const queryKeys = {
@@ -66,7 +82,17 @@ export const queryKeys = {
     all: ['contacts'] as const,
     lists: () => [...queryKeys.contacts.all, 'list'] as const,
     list: (filters?: Record<string, any>) => [...queryKeys.contacts.lists(), filters || {}] as const,
+    infinite: (filters?: Record<string, any>) => [...queryKeys.contacts.all, 'infinite', filters || {}] as const,
     detail: (id: string) => [...queryKeys.contacts.all, 'detail', id] as const,
+  },
+
+  // 📈 Leads (CRM)
+  leads: {
+    all: ['leads'] as const,
+    lists: () => [...queryKeys.leads.all, 'list'] as const,
+    list: (filters?: Record<string, any>) => [...queryKeys.leads.lists(), filters || {}] as const,
+    infinite: (filters?: Record<string, any>) => [...queryKeys.leads.all, 'infinite', filters || {}] as const,
+    detail: (id: string) => [...queryKeys.leads.all, 'detail', id] as const,
   },
   
   // 🏷️ Tags

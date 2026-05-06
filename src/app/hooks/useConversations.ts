@@ -10,26 +10,12 @@
  */
 
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback } from 'react';
 import { authFetch, API_BASE } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import { queryKeys } from '../lib/react-query';
+import { useDebouncedInvalidation } from './useDebouncedInvalidation';
 import { ConversationWithDetails } from '../types/database';
-
-/**
- * Debounced invalidation - agrupa múltiplos eventos Realtime
- * em uma única invalidação (evita 100+ refetches/min).
- */
-function useDebouncedInvalidation(queryClient: ReturnType<typeof useQueryClient>, delayMs = 2000) {
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  return useCallback(() => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.conversations.all });
-    }, delayMs);
-  }, [queryClient, delayMs]);
-}
 
 const CONVERSATIONS_PER_PAGE = 50;
 
@@ -330,7 +316,7 @@ export function useConversations(options: UseConversationsOptions = {}) {
     placeholderData: (previousData) => previousData,
   });
 
-  const debouncedInvalidate = useDebouncedInvalidation(queryClient);
+  const debouncedInvalidate = useDebouncedInvalidation(queryKeys.conversations.all);
 
   // Realtime: invalidar cache (debounced) quando houver mudanças
   useEffect(() => {
