@@ -11,7 +11,6 @@ import {
 } from './ui/drawer';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { ScrollArea } from './ui/scroll-area';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { toast } from 'sonner';
@@ -416,7 +415,7 @@ export function TemplateSelector({ conversation, onClose, onTemplateSent }: Temp
             </div>
             
             {/* List */}
-            <ScrollArea className="flex-1">
+            <div className="flex-1 min-h-0 overflow-y-auto">
               <div className="p-2 space-y-1">
                 {loading ? (
                   <div className="flex flex-col items-center justify-center py-12">
@@ -470,7 +469,7 @@ export function TemplateSelector({ conversation, onClose, onTemplateSent }: Temp
                   })
                 )}
               </div>
-            </ScrollArea>
+            </div>
           </div>
 
           {/* Right: Preview & Config */}

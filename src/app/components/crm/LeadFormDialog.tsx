@@ -28,6 +28,7 @@ const statusOptions: { value: LeadStatus; label: string }[] = [
   { value: 'visita_realizada', label: 'Visita Realizada' },
   { value: 'visita_cancelada', label: 'Visita Cancelada' },
   { value: 'matriculado', label: 'Matriculado' },
+  { value: 'base_fria', label: 'Base fria' },
   { value: 'perdido', label: 'Perdido' },
 ];
 

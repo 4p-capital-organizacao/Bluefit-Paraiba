@@ -4,6 +4,7 @@ import { ConversationWithDetails } from '@/app/types/database';
 import { ConversationListV2 } from '@/app/components/ConversationListV2'; // 🚀 Nova versão com React Query
 import { ChatView } from '@/app/components/ChatView';
 import { CreateContactDialog } from '@/app/components/CreateContactDialog';
+import { AssignmentQueueWidget } from '@/app/components/AssignmentQueueWidget';
 import { MessageSquare, UserPlus, ArrowLeft } from 'lucide-react';
 import { Button } from '@/app/components/ui/button';
 import { toast } from 'sonner';
@@ -194,6 +195,12 @@ export function ConversationsModule() {
           </div>
         </div>
         
+        {/* H1.2: Pegar próxima conversa da fila da unidade */}
+        <AssignmentQueueWidget
+          onClaimed={handleSelectConversation}
+          onAfterClaim={() => setListRefreshTrigger(prev => prev + 1)}
+        />
+
         <ConversationListV2
           onSelectConversation={handleSelectConversation}
           selectedConversationId={selectedConversation?.id}

@@ -1,6 +1,7 @@
 import {
   Home, Users, LogOut, Menu, X, Settings, UserPlus, MessagesSquare,
   BarChart3, ChevronLeft, ChevronRight, ChevronDown, Headset, User, Bell, UsersRound,
+  FileText,
 } from 'lucide-react';
 import { useState, useMemo } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
@@ -10,10 +11,11 @@ import blueDeskLogo from '../../assets/d1f7bbbdb5465392ff878250337517f331699beb.
 import { colors } from './ModernDesignSystem';
 import { usePresence, PresenceStatus } from '../hooks/usePresence';
 import { useUserProfile } from '../hooks/useUserProfile';
+import { useModulePermissions } from '../hooks/useModulePermissions';
 import { useAuth } from '../contexts/AuthContext';
 import { Badge } from './ui/badge';
 
-type ModuleId = 'home' | 'contacts' | 'conversations' | 'dashboard' | 'team-dashboard' | 'crm' | 'config' | 'profile' | 'notifications';
+type ModuleId = 'home' | 'contacts' | 'conversations' | 'dashboard' | 'team-dashboard' | 'crm' | 'templates' | 'config' | 'profile' | 'notifications';
 
 interface MenuItem {
   id: ModuleId;
@@ -31,6 +33,7 @@ function getActiveModule(pathname: string): ModuleId {
   if (pathname.startsWith('/contacts')) return 'contacts';
   if (pathname.startsWith('/conversations')) return 'conversations';
   if (pathname.startsWith('/crm')) return 'crm';
+  if (pathname.startsWith('/templates')) return 'templates';
   if (pathname.startsWith('/config')) return 'config';
   if (pathname.startsWith('/profile')) return 'profile';
   if (pathname.startsWith('/notifications')) return 'notifications';
@@ -46,6 +49,7 @@ export function Sidebar() {
   const navigate = useNavigate();
   const { authUser, logout } = useAuth();
   const { profile: userProfile } = useUserProfile();
+  const { canAccess: canAccessModule } = useModulePermissions();
   const { myStatus } = usePresence();
 
   const currentModule = getActiveModule(location.pathname);
@@ -87,14 +91,21 @@ export function Sidebar() {
     const hasCargo = userProfile.isLoaded && cargoLower !== 'sem cargo' && cargoLower !== '';
 
     if (hasCargo) {
+      const chatChildren: { id: ModuleId; label: string; icon: React.ComponentType<{ className?: string }>; path: string }[] = [
+        { id: 'contacts', label: 'Contatos', icon: UserPlus, path: '/contacts' },
+        { id: 'conversations', label: 'Conversas', icon: MessagesSquare, path: '/conversations' },
+      ];
+
+      // Templates: gated por menu_item_permissions (admin escolhe quais cargos veem)
+      if (canAccessModule('templates')) {
+        chatChildren.push({ id: 'templates', label: 'Templates', icon: FileText, path: '/templates' });
+      }
+
       items.push({
         id: 'conversations' as ModuleId,
         label: 'Chat ao vivo',
         icon: Headset,
-        children: [
-          { id: 'contacts', label: 'Contatos', icon: UserPlus, path: '/contacts' },
-          { id: 'conversations', label: 'Conversas', icon: MessagesSquare, path: '/conversations' },
-        ],
+        children: chatChildren,
       });
 
       // CRM: Atendente+
@@ -107,7 +118,7 @@ export function Sidebar() {
     }
 
     return items;
-  }, [userProfile.isManager, userProfile.isFullAdmin, userProfile.isLoaded, userProfile.cargoName]);
+  }, [userProfile.isManager, userProfile.isFullAdmin, userProfile.isLoaded, userProfile.cargoName, canAccessModule]);
 
   function handleLogout() {
     logout();

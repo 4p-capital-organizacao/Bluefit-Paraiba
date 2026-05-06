@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Send, AlertCircle, FileText, User as UserIcon, Tag as TagIcon, X, XCircle, StickyNote, Image as ImageIcon, Mic, Calendar, Smile, Paperclip, CircleDot, Lock, UserCheck, Building2, Clock } from 'lucide-react';
+import { Send, AlertCircle, FileText, User as UserIcon, Tag as TagIcon, X, XCircle, StickyNote, Image as ImageIcon, Mic, Calendar, Smile, Paperclip, CircleDot, Lock, UserCheck, Building2, Clock, Zap } from 'lucide-react';
 import { MessageBubble, normalizeStatus, getStatusIcon } from './MessageBubble';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -23,6 +23,8 @@ import { ScheduledCallbacksList } from './ScheduledCallbacksList';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 import EmojiPicker, { EmojiClickData } from 'emoji-picker-react';
 import { useUserProfile } from '../hooks/useUserProfile';
+import { SnippetPicker } from './SnippetPicker';
+import { SnippetManagerDialog } from './SnippetManagerDialog';
 
 interface ChatViewProps {
   conversation: ConversationWithDetails;
@@ -48,6 +50,7 @@ export function ChatView({ conversation, onConversationUpdate }: ChatViewProps) 
   const [selectedFile, setSelectedFile] = useState<File | null>(null); // Arquivo selecionado
   const [filePreview, setFilePreview] = useState<string | null>(null); // Preview do arquivo
   const [isRecordingAudio, setIsRecordingAudio] = useState(false); // 🎤 Estado para gravação de áudio
+  const [showSnippetManager, setShowSnippetManager] = useState(false); // H1.5: gerenciar snippets
   const [showEmojiPicker, setShowEmojiPicker] = useState(false); // 😊 Estado para emoji picker
   const [showCloseConfirm, setShowCloseConfirm] = useState(false); // 🔒 Confirmação de fechamento
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1314,6 +1317,23 @@ export function ChatView({ conversation, onConversationUpdate }: ChatViewProps) 
                     </TooltipContent>
                   </Tooltip>
 
+                  {/* H1.5: Botão Snippets — abre manager (ou dica do "/" no composer) */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        onClick={() => setShowSnippetManager(true)}
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 md:h-9 md:w-9 text-[#9CA3AF] hover:text-[#0023D5] hover:bg-[#E6EAFF] transition-all duration-150"
+                      >
+                        <Zap className="w-4 h-4 md:w-5 md:h-5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="bg-[#1B1B1B] text-white border-[#1B1B1B] px-3 py-1.5 text-xs font-medium shadow-lg">
+                      Snippets (digite "/" no campo)
+                    </TooltipContent>
+                  </Tooltip>
+
                   {/* Botão Enviar Imagem */}
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -1354,19 +1374,31 @@ export function ChatView({ conversation, onConversationUpdate }: ChatViewProps) 
             </div>
 
             {/* Campo de Mensagem */}
-            <div className="w-full px-4 md:px-6 pb-4 pt-3">
+            <div className="w-full px-4 md:px-6 pb-4 pt-3 relative">
+              {/* H1.5: Snippet Picker (slash-command) */}
+              <SnippetPicker
+                messageText={messageText}
+                onPick={(finalBody) => setMessageText(finalBody)}
+                contact={conversation.contact ? { display_name: conversation.contact.display_name, first_name: conversation.contact.first_name } : null}
+                consultor={{ nome: userProfile.nome, sobrenome: userProfile.sobrenome }}
+                unitName={userProfile.unitName}
+              />
               <div className="flex gap-2 w-full items-end">
                 <Textarea
                   value={messageText}
                   onChange={(e) => setMessageText(e.target.value)}
-                  placeholder={isWithinWindow ? "Digite sua mensagem..." : "Janela de 24h expirada"}
+                  placeholder={isWithinWindow ? "Digite sua mensagem... (use \"/\" para snippets)" : "Janela de 24h expirada"}
                   disabled={!isWithinWindow || sending}
                   className="resize-none bg-[#F3F3F3] border-[#E5E7EB] focus:border-[#0023D5] focus:ring-[#0023D5]/10 text-[14px] text-[#1B1B1B] placeholder:text-[#9CA3AF] rounded-3xl flex-1 min-w-0 px-4 py-2.5"
                   rows={2}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
+                    // SnippetPicker intercepta Enter/Tab/setas quando aberto (capture: true)
+                    if (e.key === 'Enter' && !e.shiftKey && !messageText.startsWith('/')) {
                       e.preventDefault();
                       handleSendMessage();
+                    } else if (e.key === 'Escape' && messageText.startsWith('/')) {
+                      e.preventDefault();
+                      setMessageText('');
                     }
                   }}
                 />
@@ -1399,6 +1431,9 @@ export function ChatView({ conversation, onConversationUpdate }: ChatViewProps) 
           }}
         />
       )}
+
+      {/* H1.5: Manager de snippets (CRUD) */}
+      <SnippetManagerDialog open={showSnippetManager} onOpenChange={setShowSnippetManager} />
 
       {showNotesDialog && (
         <NotesDialog

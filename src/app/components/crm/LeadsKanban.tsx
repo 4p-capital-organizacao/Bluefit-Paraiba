@@ -1,9 +1,10 @@
 import { LeadWithDetails, LeadStatus } from '../../types/database';
-import { User, Phone, Mail, Calendar, MapPin, Clock, Star, Award } from 'lucide-react';
+import { User, Phone, Mail, Calendar, MapPin, Clock, Star, Award, RotateCcw } from 'lucide-react';
 import { useDrag, useDrop } from 'react-dnd';
 import { Badge } from '../ui/badge';
 import { cn } from '../ui/utils';
 import { useRef } from 'react';
+import { FollowupStepper } from './FollowupStepper';
 
 // SVG inline do ícone WhatsApp (sem dependência externa)
 function WhatsAppIcon({ className }: { className?: string }) {
@@ -46,45 +47,95 @@ function getTimeInCurrentStatus(lead: LeadWithDetails): string {
   return getTimeAgo(lead.created_at);
 }
 
+// Encurta URLs longas com UTMs — mostra só host + 1 segmento, sem query.
+// Texto livre passa intacto (truncate via CSS).
+function formatOrigem(origem: string): string {
+  if (!origem) return '';
+  const cleaned = origem.trim();
+  const looksLikeUrl =
+    /^https?:\/\//i.test(cleaned) ||
+    /^[a-z0-9-]+\.[a-z]{2,}/i.test(cleaned); // ex: "o.com.br/campina?..."
+  if (!looksLikeUrl) return cleaned;
+  try {
+    const withProto = /^https?:\/\//i.test(cleaned) ? cleaned : 'https://' + cleaned;
+    const u = new URL(withProto);
+    const firstSegment = u.pathname.split('/').filter(Boolean)[0];
+    return u.hostname + (firstSegment ? '/' + firstSegment : '');
+  } catch {
+    // Fallback: cortar antes do ? e limitar tamanho
+    const beforeQuery = cleaned.split('?')[0];
+    return beforeQuery.length > 32 ? beforeQuery.slice(0, 32) + '…' : beforeQuery;
+  }
+}
+
 const ITEM_TYPE = 'LEAD';
 
-const statusConfig: Record<LeadStatus, { label: string; color: string; bgColor: string }> = {
-  novo: { 
-    label: 'Novo', 
-    color: 'text-blue-700', 
-    bgColor: 'bg-blue-50 border-blue-200' 
+// Identidade visual de cada stage — apenas cor de acento (texto + sidebar do card),
+// sem fundo colorido na coluna (mantém canvas neutro estilo Pipedrive/Linear).
+const statusConfig: Record<LeadStatus, { label: string; text: string; accent: string; dot: string }> = {
+  novo: {
+    label: 'Novo',
+    text: 'text-blue-700',
+    accent: 'bg-blue-500',
+    dot: 'bg-blue-500',
   },
-  contato_feito: { 
-    label: 'Contato Feito', 
-    color: 'text-purple-700', 
-    bgColor: 'bg-purple-50 border-purple-200' 
+  contato_feito: {
+    label: 'Contato Feito',
+    text: 'text-purple-700',
+    accent: 'bg-purple-500',
+    dot: 'bg-purple-500',
   },
-  visita_agendada: { 
-    label: 'Visita Agendada', 
-    color: 'text-amber-700', 
-    bgColor: 'bg-amber-50 border-amber-200' 
+  visita_agendada: {
+    label: 'Visita Agendada',
+    text: 'text-amber-700',
+    accent: 'bg-amber-500',
+    dot: 'bg-amber-500',
   },
-  visita_realizada: { 
-    label: 'Visita Realizada', 
-    color: 'text-cyan-700', 
-    bgColor: 'bg-cyan-50 border-cyan-200' 
+  visita_realizada: {
+    label: 'Visita Realizada',
+    text: 'text-cyan-700',
+    accent: 'bg-cyan-500',
+    dot: 'bg-cyan-500',
   },
-  visita_cancelada: { 
-    label: 'Visita Cancelada', 
-    color: 'text-orange-700', 
-    bgColor: 'bg-orange-50 border-orange-200' 
+  visita_cancelada: {
+    label: 'Visita Cancelada',
+    text: 'text-orange-700',
+    accent: 'bg-orange-500',
+    dot: 'bg-orange-500',
   },
-  matriculado: { 
-    label: 'Matriculado', 
-    color: 'text-green-700', 
-    bgColor: 'bg-green-50 border-green-200' 
+  matriculado: {
+    label: 'Matriculado',
+    text: 'text-emerald-700',
+    accent: 'bg-emerald-500',
+    dot: 'bg-emerald-500',
   },
-  perdido: { 
-    label: 'Perdido', 
-    color: 'text-red-700', 
-    bgColor: 'bg-red-50 border-red-200' 
+  base_fria: {
+    label: 'Base fria',
+    text: 'text-slate-600',
+    accent: 'bg-slate-400',
+    dot: 'bg-slate-400',
+  },
+  perdido: {
+    label: 'Perdido',
+    text: 'text-red-700',
+    accent: 'bg-red-500',
+    dot: 'bg-red-500',
   },
 };
+
+// Cor do avatar circular (responsável) — derivada do nome
+function avatarColor(name: string): string {
+  const colors = ['bg-blue-500', 'bg-purple-500', 'bg-emerald-500', 'bg-amber-500', 'bg-rose-500', 'bg-cyan-500', 'bg-indigo-500'];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = ((hash << 5) - hash) + name.charCodeAt(i);
+  return colors[Math.abs(hash) % colors.length];
+}
+
+function avatarInitials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return name.slice(0, 2).toUpperCase();
+}
 
 const columns: LeadStatus[] = [
   'novo',
@@ -93,7 +144,8 @@ const columns: LeadStatus[] = [
   'visita_realizada',
   'visita_cancelada',
   'matriculado',
-  'perdido'
+  'base_fria',
+  'perdido',
 ];
 
 // Componente do Card arrastável
@@ -112,110 +164,136 @@ function LeadCard({ lead, onLeadClick, onWhatsAppClick }: LeadCardProps) {
     }),
   }), [lead.id, lead.situacao]);
 
+  const config = statusConfig[lead.situacao];
+  const responsibleName = lead.responsavel?.trim();
+  // Stepper:
+  // - contato_feito (ativo no ciclo) → SEMPRE mostra (○○ se count=0, ●○ se 1, ●● se 2)
+  // - base_fria + count>0 (ciclo esgotado) → mostra cinza
+  // - outros stages → oculto
+  const showFollowupStepper =
+    lead.situacao === 'contato_feito' ||
+    (lead.situacao === 'base_fria' && (lead.followup_count ?? 0) > 0);
+  const hasInboundFresh = lead.lastMessageDirection === 'inbound';
+
   return (
     <div
       ref={drag}
       className={cn(
-        "bg-white rounded-lg p-4 shadow-sm border border-slate-200",
-        "hover:shadow-md transition-all cursor-move",
-        "hover:border-[#0028e6] group",
-        isDragging && 'opacity-50 cursor-grabbing'
+        'relative bg-white rounded-md shadow-sm border border-slate-200 overflow-hidden',
+        'hover:shadow-md hover:border-slate-300 transition-all cursor-grab active:cursor-grabbing group',
+        isDragging && 'opacity-40',
       )}
       onClick={() => onLeadClick(lead)}
     >
-      {/* Nome + WhatsApp Button */}
-      <h4 className="font-bold text-slate-900 mb-2 flex items-center justify-between gap-2">
-        <span className="truncate">{lead.nome_completo}</span>
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          {/* Botão WhatsApp */}
+      {/* Sidebar colorida 3px com a cor do stage */}
+      <span className={cn('absolute left-0 top-0 bottom-0 w-[3px]', config?.accent || 'bg-slate-400')} />
+
+      <div className="pl-3 pr-2.5 py-2.5 space-y-1.5">
+        {/* Linha 1: Nome + REATIVADO + WhatsApp */}
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex-1 min-w-0">
+            <h4 className="font-semibold text-[13px] text-slate-900 leading-tight truncate">
+              {lead.nome_completo}
+            </h4>
+            {lead.recently_reactivated && (
+              <span
+                className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded mt-0.5 bg-emerald-100 text-emerald-700"
+                title="Lead voltou da Base fria — cliente respondeu"
+              >
+                <RotateCcw className="w-2.5 h-2.5" />
+                REATIVADO
+              </span>
+            )}
+          </div>
           {lead.telefone && onWhatsAppClick && (
             <button
-              onClick={(e) => {
-                e.stopPropagation(); // Impedir que abra o formulário do lead
-                onWhatsAppClick(lead);
-              }}
+              onClick={(e) => { e.stopPropagation(); onWhatsAppClick(lead); }}
               className={cn(
-                "relative w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-200",
-                "bg-[#25D366]/10 text-[#25D366] hover:bg-[#25D366] hover:text-white",
-                "hover:shadow-md hover:shadow-[#25D366]/25 active:scale-90"
+                'relative w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0',
+                'bg-[#25D366]/10 text-[#25D366] hover:bg-[#25D366] hover:text-white transition-colors',
               )}
               title="Abrir chat WhatsApp"
             >
-              <WhatsAppIcon className="w-3.5 h-3.5" />
-              {/* Bolinha vermelha: última mensagem é do cliente (inbound) */}
-              {lead.lastMessageDirection === 'inbound' && (
-                <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white animate-pulse" />
+              <WhatsAppIcon className="w-3 h-3" />
+              {hasInboundFresh && (
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-red-500 rounded-full border border-white animate-pulse" />
               )}
             </button>
           )}
         </div>
-      </h4>
 
-      {/* Origem + Pontuação + Classificação - linha compacta */}
-      {(lead.origem || (lead.pontuacao !== null && lead.pontuacao !== undefined) || lead.classificacao) && (
-        <div className="flex items-center gap-2 mb-3 flex-wrap">
-          {lead.origem && (
-            <span className="flex items-center gap-1 text-xs text-slate-500">
-              <MapPin className="w-3 h-3 flex-shrink-0" />
-              {lead.origem}
-            </span>
-          )}
-          {lead.pontuacao !== null && lead.pontuacao !== undefined && (
-            <Badge
-              variant="secondary"
-              className="bg-amber-100 text-amber-700 text-[10px] font-semibold flex items-center gap-0.5 px-1.5 py-0 h-5"
-            >
-              <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
-              {lead.pontuacao}
-            </Badge>
-          )}
-          {lead.classificacao && (
-            <Badge
-              variant="secondary"
-              className="bg-purple-100 text-purple-700 text-[10px] font-semibold flex items-center gap-0.5 px-1.5 py-0 h-5"
-            >
-              <Award className="w-3 h-3" />
-              {lead.classificacao}
-            </Badge>
-          )}
-        </div>
-      )}
-
-      {/* Informações */}
-      <div className="space-y-1.5 text-xs">
-        {/* Telefone */}
-        <div className="flex items-center gap-2 text-slate-600">
-          <Phone className="w-3.5 h-3.5 flex-shrink-0" />
-          <span className="truncate">{lead.telefone}</span>
-        </div>
-
-        {/* Email */}
-        {lead.email && (
-          <div className="flex items-center gap-2 text-slate-600">
-            <Mail className="w-3.5 h-3.5 flex-shrink-0" />
-            <span className="truncate">{lead.email}</span>
+        {/* Linha 2: chips compactos (origem + score + classificação) */}
+        {(lead.origem || lead.pontuacao != null || lead.classificacao) && (
+          <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+            {lead.origem && (
+              <span
+                className="inline-flex items-center gap-0.5 text-[10px] text-slate-500 max-w-[140px]"
+                title={lead.origem}
+              >
+                <MapPin className="w-2.5 h-2.5 flex-shrink-0" />
+                <span className="truncate">{formatOrigem(lead.origem)}</span>
+              </span>
+            )}
+            {lead.pontuacao != null && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-amber-700">
+                <Star className="w-2.5 h-2.5 fill-amber-500 text-amber-500" />
+                {lead.pontuacao}
+              </span>
+            )}
+            {lead.classificacao && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-purple-700">
+                <Award className="w-2.5 h-2.5" />
+                <span className="truncate max-w-[100px]">{lead.classificacao}</span>
+              </span>
+            )}
           </div>
         )}
 
-        {/* Responsável */}
-        {lead.responsavel && (
-          <div className="flex items-center gap-2 text-slate-600">
-            <User className="w-3.5 h-3.5 flex-shrink-0" />
-            <span className="truncate">
-              {lead.responsavel}
-            </span>
-          </div>
-        )}
+        {/* Linha 3: telefone (preferência) ou email (fallback) — não os dois */}
+        <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+          {lead.telefone ? (
+            <>
+              <Phone className="w-3 h-3 flex-shrink-0" />
+              <span className="truncate font-mono">{lead.telefone}</span>
+            </>
+          ) : lead.email ? (
+            <>
+              <Mail className="w-3 h-3 flex-shrink-0" />
+              <span className="truncate">{lead.email}</span>
+            </>
+          ) : null}
+        </div>
 
-        {/* Rodapé: Data de criação (esq) | Tempo na situação (dir) */}
-        <div className="flex items-center justify-between gap-2 pt-2 mt-2 border-t border-slate-100">
-          <div className="flex items-center gap-1 text-slate-400">
-            <Calendar className="w-3 h-3 flex-shrink-0" />
-            <span className="text-[10px]">{formatShortDate(lead.created_at)}</span>
+        {/* Rodapé: avatar do responsável + tempo + stepper */}
+        <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-100">
+          <div className="flex items-center gap-1.5 min-w-0 flex-1">
+            {responsibleName ? (
+              <>
+                <span
+                  className={cn(
+                    'w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0',
+                    avatarColor(responsibleName),
+                  )}
+                  title={responsibleName}
+                >
+                  {avatarInitials(responsibleName)}
+                </span>
+                <span className="text-[10px] text-slate-500 truncate">{responsibleName}</span>
+              </>
+            ) : (
+              <span className="text-[10px] text-slate-300 italic">Sem responsável</span>
+            )}
           </div>
-          <div className="flex items-center gap-1">
-            <Clock className="w-3 h-3 text-[#0028e6] flex-shrink-0" />
-            <span className="text-[11px] font-semibold text-[#0028e6]">
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {showFollowupStepper && (
+              <FollowupStepper
+                count={lead.followup_count || 0}
+                total={2}
+                exhausted={lead.situacao === 'base_fria'}
+              />
+            )}
+            <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-slate-500" title={`Criado: ${formatShortDate(lead.created_at)}`}>
+              <Clock className="w-2.5 h-2.5" />
               {getTimeInCurrentStatus(lead)}
             </span>
           </div>
@@ -258,33 +336,32 @@ function KanbanColumn({ status, leads, onLeadClick, onDrop, onWhatsAppClick }: K
   return (
     <div
       ref={ref}
-      className="flex-shrink-0 w-[260px] sm:w-[280px] md:w-[300px] lg:w-[320px] flex flex-col h-full min-h-0"
+      className={cn(
+        'flex-shrink-0 w-[240px] flex flex-col h-full min-h-0 rounded-lg border bg-slate-50/80 transition-colors',
+        isActive ? 'border-[#0028e6] bg-blue-50/50' : 'border-slate-200',
+      )}
     >
-      {/* Header da coluna */}
-      <div className={cn(
-        "px-4 py-3 rounded-t-xl border-2 border-b-0 transition-all",
-        config.bgColor,
-        isActive && "ring-2 ring-[#0028e6] ring-offset-2"
-      )}>
-        <div className="flex items-center justify-between">
-          <h3 className={cn("font-bold text-sm", config.color)}>
+      {/* Header neutro: dot colorido + label + count */}
+      <div className="px-3 py-2.5 flex items-center justify-between border-b border-slate-200/80 sticky top-0 bg-slate-50/95 backdrop-blur-sm rounded-t-lg z-10">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={cn('w-2 h-2 rounded-full flex-shrink-0', config.dot)} />
+          <h3 className={cn('font-semibold text-[12px] uppercase tracking-wide truncate', config.text)}>
             {config.label}
           </h3>
-          <Badge variant="secondary" className="text-xs font-bold">
-            {leads.length}
-          </Badge>
         </div>
+        <span className="text-[10px] font-bold text-slate-500 bg-white border border-slate-200 rounded-md px-1.5 py-0.5 flex-shrink-0">
+          {leads.length}
+        </span>
       </div>
 
       {/* Cards dos leads */}
-      <div className={cn(
-        "flex-1 overflow-y-auto space-y-3 p-3 border-2 border-t-0 rounded-b-xl transition-all min-h-0",
-        config.bgColor,
-        isActive && "ring-2 ring-[#0028e6] ring-offset-2 bg-opacity-70"
-      )}>
+      <div className="flex-1 overflow-y-auto space-y-2 p-2 min-h-0">
         {leads.length === 0 ? (
-          <div className="text-center py-8 text-slate-400 text-sm">
-            {isActive ? 'Solte aqui' : 'Nenhum lead'}
+          <div className={cn(
+            'text-center py-12 text-[11px] text-slate-400 rounded-md border-2 border-dashed transition-colors',
+            isActive ? 'border-[#0028e6] text-[#0028e6] bg-blue-50' : 'border-slate-200',
+          )}>
+            {isActive ? 'Solte aqui' : 'Vazio'}
           </div>
         ) : (
           leads.map((lead) => (

@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card';
 import { BarChart, Bar, PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
-import { MessageSquare, Users, Clock, Activity, Send, UsersRound, CalendarDays, User, CheckCircle2, Inbox, Building2 } from 'lucide-react';
+import { MessageSquare, Users, Clock, Activity, Send, UsersRound, CalendarDays, User, CheckCircle2, Inbox, Building2, TrendingDown } from 'lucide-react';
+import { FunnelPanel } from '@/app/components/FunnelPanel';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select';
 import { Popover, PopoverTrigger, PopoverContent } from '@/app/components/ui/popover';
 import { Calendar } from '@/app/components/ui/calendar';
@@ -178,8 +179,9 @@ export function TeamDashboardModule() {
   async function loadData() {
     setLoading(true);
     try {
-      const isFullAdmin = userProfile.isFullAdmin;
-      const filterUnitIds = isFullAdmin ? [] : (activeUnitId ? [activeUnitId] : userUnitIds);
+      // Sempre filtra pelo activeUnitId selecionado no header (mesmo para admin):
+      // o objetivo do TeamDashboard é ter visão por unidade.
+      const filterUnitIds = activeUnitId ? [activeUnitId] : userUnitIds;
 
       const [conversations, messages, teamProfiles, contacts, tags] = await Promise.all([
         fetchAll('conversations',
@@ -200,15 +202,15 @@ export function TeamDashboardModule() {
         fetchAll('conversation_tags', 'conversation_id, tag:tags(id, name, color)'),
       ]);
 
-      // Filtrar por unidade
-      const fConversations = isFullAdmin ? conversations : conversations.filter((c: any) => filterUnitIds.includes(c.unit_id));
+      // Filtrar por unidade (sempre — admin/gerente/supervisor)
+      const fConversations = conversations.filter((c: any) => filterUnitIds.includes(c.unit_id));
       const fConvIds = new Set(fConversations.map((c: any) => c.id));
       const fMessages = messages.filter((m: any) => fConvIds.has(m.conversation_id));
-      const fContacts = isFullAdmin ? contacts : contacts.filter((c: any) => filterUnitIds.includes(c.unit_id));
+      const fContacts = contacts.filter((c: any) => filterUnitIds.includes(c.unit_id));
       const fTags = tags.filter((t: any) => fConvIds.has(t.conversation_id));
 
       // Operadores da unidade selecionada
-      const fTeam = isFullAdmin ? teamProfiles : teamProfiles.filter((p: any) => filterUnitIds.includes(p.id_unidade));
+      const fTeam = teamProfiles.filter((p: any) => filterUnitIds.includes(p.id_unidade));
       const ops = fTeam.map((p: any) => ({
         id: p.id,
         name: p.nome && p.sobrenome ? `${p.nome} ${p.sobrenome}` : p.email || 'Sem nome',
@@ -589,6 +591,13 @@ export function TeamDashboardModule() {
           </div>
         </div>
 
+        {/* ─────────────── 1. VISÃO OPERACIONAL ─────────────── */}
+        <div>
+          <div className="flex items-center gap-2 mb-3">
+            <span className="w-1 h-5 bg-gradient-to-b from-[#8b5cf6] to-[#0028e6] rounded-full" />
+            <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">Operação no período</h2>
+          </div>
+
         {/* ── KPI Cards ── */}
         <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-4">
           {[
@@ -613,6 +622,29 @@ export function TeamDashboardModule() {
             </Card>
           ))}
         </div>
+        </div>
+
+        {/* ─────────────── 2. FUNIL DE CONVERSÃO ─────────────── */}
+        <div>
+          <div className="flex items-center gap-2 mb-3">
+            <span className="w-1 h-5 bg-gradient-to-b from-[#0028e6] to-[#00e5ff] rounded-full" />
+            <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700 flex items-center gap-1.5">
+              <TrendingDown className="w-3.5 h-3.5 text-[#0028e6]" />
+              Funil da unidade
+            </h2>
+          </div>
+          <FunnelPanel
+            selectedUnit={activeUnitId !== null ? String(activeUnitId) : 'all'}
+            dateRange={dateRange}
+          />
+        </div>
+
+        {/* ─────────────── 3. PERFORMANCE DA EQUIPE ─────────────── */}
+        <div>
+          <div className="flex items-center gap-2 mb-3">
+            <span className="w-1 h-5 bg-gradient-to-b from-[#d97706] to-[#f59e0b] rounded-full" />
+            <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">Performance da equipe</h2>
+          </div>
 
         {/* ── Tabela Comparativa ── */}
         <Card className="border-0 shadow-md">
@@ -840,6 +872,7 @@ export function TeamDashboardModule() {
               </ResponsiveContainer>
             </CardContent>
           </Card>
+        </div>
         </div>
 
       </div>

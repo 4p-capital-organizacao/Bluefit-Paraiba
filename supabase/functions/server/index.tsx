@@ -941,7 +941,8 @@ app.get("/make-server-844b77a1/api/whatsapp/config-check", async (c) => {
  */
 app.get("/make-server-844b77a1/api/whatsapp/templates", async (c) => {
   const timestamp = new Date().toISOString();
-  
+  const includeAll = c.req.query('all') === '1';
+
   console.log('');
   console.log('╔════════════════════════════════════════════════════════════╗');
   console.log('║  🚀 ENDPOINT TEMPLATES - PÚBLICO                         ║');
@@ -950,9 +951,9 @@ app.get("/make-server-844b77a1/api/whatsapp/templates", async (c) => {
   console.log('');
 
   try {
-    console.log('📋 [PÚBLICO] Buscando templates da API da Meta...');
-    
-    const result = await whatsapp.fetchWhatsAppTemplates();
+    console.log(`📋 [PÚBLICO] Buscando templates da API da Meta (all=${includeAll})...`);
+
+    const result = await whatsapp.fetchWhatsAppTemplates({ includeAllStatuses: includeAll });
 
     console.log('📦 Resultado da busca:', {
       success: result.success,
@@ -985,6 +986,330 @@ app.get("/make-server-844b77a1/api/whatsapp/templates", async (c) => {
       success: false,
       error: error instanceof Error ? error.message : 'Erro desconhecido',
       templates: []
+    }, 500);
+  }
+});
+
+/**
+ * POST /api/whatsapp/templates
+ * Cria um novo template via API da Meta (apenas Gerentes/Admin — cargo >= 4)
+ */
+app.post("/make-server-844b77a1/api/whatsapp/templates", authMiddleware, async (c) => {
+  try {
+    const userId = c.get('userId');
+
+    // Verificar permissão via menu_item_permissions (admin pode reconfigurar via UI)
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('id, id_cargo, cargo:cargos!profiles_id_cargo_fkey(id, level, papeis)')
+      .eq('id', userId)
+      .single();
+
+    if (profileError || !profile) {
+      return c.json({ success: false, error: 'Perfil não encontrado.' }, 403);
+    }
+
+    const cargoLevel = (profile.cargo as any)?.level ?? 0;
+
+    // Consulta a tabela menu_item_permissions
+    const { data: perm, error: permErr } = await supabaseAdmin
+      .from('menu_item_permissions')
+      .select('required_cargo_levels')
+      .eq('module_key', 'templates')
+      .single();
+
+    if (permErr || !perm) {
+      console.warn(`⚠️ [TEMPLATES] menu_item_permissions sem registro para 'templates'`);
+      return c.json({
+        success: false,
+        error: 'Permissões do módulo Templates não configuradas. Peça ao administrador.'
+      }, 403);
+    }
+
+    const allowedLevels: number[] = perm.required_cargo_levels || [];
+    if (!allowedLevels.includes(cargoLevel)) {
+      console.warn(`⚠️ [TEMPLATES] Acesso negado userId=${userId} cargoLevel=${cargoLevel} permitidos=${JSON.stringify(allowedLevels)}`);
+      return c.json({
+        success: false,
+        error: 'Seu cargo não tem permissão para criar templates. Peça ao administrador.'
+      }, 403);
+    }
+
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== 'object') {
+      return c.json({ success: false, error: 'Body inválido.' }, 400);
+    }
+
+    const input = {
+      name: typeof body.name === 'string' ? body.name.trim() : '',
+      language: typeof body.language === 'string' ? body.language.trim() : 'pt_BR',
+      category: body.category,
+      body: typeof body.body === 'string' ? body.body : '',
+      footer: typeof body.footer === 'string' ? body.footer.trim() : null,
+      buttons: Array.isArray(body.buttons)
+        ? body.buttons
+            .filter((b: any) => b && typeof b.text === 'string')
+            .map((b: any) => ({ type: 'QUICK_REPLY', text: String(b.text).trim() }))
+        : [],
+    };
+
+    console.log(`📨 [TEMPLATES][POST] userId=${userId} cargoLevel=${cargoLevel} name=${input.name}`);
+
+    const result = await whatsapp.createWhatsAppTemplate(input as any);
+
+    if (!result.success) {
+      return c.json({ success: false, error: result.error, details: result.details }, 400);
+    }
+
+    return c.json({ success: true, template: result.template }, 200);
+  } catch (error) {
+    console.error('❌ Exceção ao criar template:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Erro desconhecido',
+    }, 500);
+  }
+});
+
+/**
+ * DELETE /api/whatsapp/templates/:name
+ * Apaga template na Meta (todas as línguas com esse nome). Restrito por
+ * menu_item_permissions['templates'].
+ */
+app.delete("/make-server-844b77a1/api/whatsapp/templates/:name", authMiddleware, async (c) => {
+  try {
+    const userId = c.get('userId');
+    const templateName = c.req.param('name');
+
+    if (!templateName) {
+      return c.json({ success: false, error: 'Nome do template não informado.' }, 400);
+    }
+
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('id, id_cargo, cargo:cargos!profiles_id_cargo_fkey(id, level, papeis)')
+      .eq('id', userId)
+      .single();
+
+    if (profileError || !profile) {
+      return c.json({ success: false, error: 'Perfil não encontrado.' }, 403);
+    }
+    const cargoLevel = (profile.cargo as any)?.level ?? 0;
+
+    const { data: perm } = await supabaseAdmin
+      .from('menu_item_permissions')
+      .select('required_cargo_levels')
+      .eq('module_key', 'templates')
+      .single();
+
+    const allowedLevels: number[] = (perm as any)?.required_cargo_levels || [];
+    if (!allowedLevels.includes(cargoLevel)) {
+      console.warn(`⚠️ [TEMPLATES][DELETE] Acesso negado userId=${userId} cargoLevel=${cargoLevel}`);
+      return c.json({
+        success: false,
+        error: 'Seu cargo não tem permissão para excluir templates.'
+      }, 403);
+    }
+
+    console.log(`🗑️ [TEMPLATES][DELETE] userId=${userId} cargoLevel=${cargoLevel} name=${templateName}`);
+
+    const result = await whatsapp.deleteWhatsAppTemplate(templateName);
+    if (!result.success) {
+      return c.json({ success: false, error: result.error, details: result.details }, 400);
+    }
+    return c.json({ success: true }, 200);
+  } catch (error) {
+    console.error('❌ Exceção ao deletar template:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Erro desconhecido',
+    }, 500);
+  }
+});
+
+/**
+ * POST /api/automation/run-followup
+ * Disparada por pg_cron via pg_net. Autentica via header X-Cron-Secret
+ * (env var BLUEDESK_CRON_SECRET).
+ *
+ * Para cada unidade com followup_enabled=true:
+ *   1. Verifica cap diário (sent_today < daily_cap)
+ *   2. Chama RPC eligible_followup_leads(unit_id, restante_do_cap)
+ *   3. Para cada lead: envia template via Meta API
+ *   4. Loga em automated_message_log
+ *   5. Salva mensagem outbound no banco (saveOutboundMessage)
+ */
+app.post("/make-server-844b77a1/api/automation/run-followup", async (c) => {
+  const expectedSecret = Deno.env.get('BLUEDESK_CRON_SECRET');
+  const providedSecret = c.req.header('X-Cron-Secret');
+
+  if (!expectedSecret) {
+    console.error('❌ [AUTOMATION] BLUEDESK_CRON_SECRET não configurado');
+    return c.json({ success: false, error: 'Secret não configurado no servidor' }, 500);
+  }
+  if (providedSecret !== expectedSecret) {
+    console.warn('⚠️ [AUTOMATION] X-Cron-Secret inválido');
+    return c.json({ success: false, error: 'Não autorizado' }, 401);
+  }
+
+  const startedAt = Date.now();
+  console.log('\n🤖 [AUTOMATION] Iniciando run-followup');
+
+  try {
+    // 1. Carrega unidades com automação ativa
+    const { data: units, error: unitsErr } = await supabaseAdmin
+      .from('unit_automation_settings')
+      .select('unit_id, daily_cap, template_name, template_language, followup_enabled')
+      .eq('followup_enabled', true);
+
+    if (unitsErr) {
+      console.error('❌ [AUTOMATION] Erro ao listar unidades ativas:', unitsErr);
+      return c.json({ success: false, error: unitsErr.message }, 500);
+    }
+
+    if (!units || units.length === 0) {
+      console.log('ℹ️ [AUTOMATION] Nenhuma unidade com automação ativa.');
+      return c.json({ success: true, processed: 0, units: [] });
+    }
+
+    const totalsByUnit: any[] = [];
+
+    for (const u of units) {
+      const unitId = (u as any).unit_id;
+      const cap = (u as any).daily_cap || 50;
+      const templateName = (u as any).template_name || 'followup_contato_feito_v1';
+      const templateLanguage = (u as any).template_language || 'pt_BR';
+
+      // 2. Conta envios de hoje
+      const todayRes = await supabaseAdmin.rpc('count_followups_today', { p_unit_id: unitId });
+      const sentToday = todayRes?.error ? 0 : (todayRes.data as number) || 0;
+      const remaining = Math.max(0, cap - sentToday);
+
+      if (remaining <= 0) {
+        console.log(`⏭️ [AUTOMATION] Unidade ${unitId}: cap diário atingido (${sentToday}/${cap})`);
+        totalsByUnit.push({ unit_id: unitId, sent_today: sentToday, processed: 0, skipped: 'daily_cap' });
+        continue;
+      }
+
+      // 3. Lista leads elegíveis (até remaining)
+      const eligibleRes = await supabaseAdmin.rpc('eligible_followup_leads', {
+        p_unit_id: unitId,
+        p_limit: remaining,
+      });
+
+      if (eligibleRes.error) {
+        console.error(`❌ [AUTOMATION] Erro eligible_followup_leads(unit=${unitId}):`, eligibleRes.error);
+        totalsByUnit.push({ unit_id: unitId, error: eligibleRes.error.message });
+        continue;
+      }
+
+      const eligible = (eligibleRes.data as any[]) || [];
+      console.log(`📋 [AUTOMATION] Unidade ${unitId}: ${eligible.length} leads elegíveis (cap restante ${remaining})`);
+
+      let okCount = 0;
+      let failCount = 0;
+
+      for (const lead of eligible) {
+        const phone = String(lead.phone || '').replace(/\+/g, '');
+        if (!phone) {
+          await supabaseAdmin.from('automated_message_log').insert({
+            template_name: templateName,
+            language: templateLanguage,
+            lead_id: lead.lead_id,
+            contact_id: lead.contact_id,
+            unit_id: unitId,
+            reason: 'sla_followup_72h',
+            status: 'skipped',
+            error_message: 'Lead sem telefone',
+          });
+          continue;
+        }
+
+        // Envia template via Meta
+        const sendResult = await whatsapp.sendWhatsAppTemplate({
+          to: phone,
+          templateName,
+          languageCode: templateLanguage,
+        });
+
+        const reason = (lead.envio_count && lead.envio_count > 0) ? 'sla_followup_reenvio_7d' : 'sla_followup_72h';
+
+        if (sendResult.success) {
+          okCount++;
+
+          // Loga sucesso
+          await supabaseAdmin.from('automated_message_log').insert({
+            template_name: templateName,
+            language: templateLanguage,
+            lead_id: lead.lead_id,
+            conversation_id: lead.conversation_id,
+            contact_id: lead.contact_id,
+            unit_id: unitId,
+            reason,
+            meta_message_id: sendResult.messageId,
+            status: 'sent',
+          });
+
+          // Salva mensagem outbound (aparece no chat)
+          if (lead.conversation_id) {
+            try {
+              await saveOutboundMessage({
+                conversationId: String(lead.conversation_id),
+                type: 'template',
+                body: `[${templateName}] (envio automático de follow-up)`,
+                providerMessageId: sendResult.messageId,
+                templateName,
+                toPhoneE164: phone,
+              });
+            } catch (saveErr) {
+              console.warn('⚠️ [AUTOMATION] saveOutboundMessage falhou (lead', lead.lead_id, '):', saveErr);
+            }
+          }
+        } else {
+          failCount++;
+          await supabaseAdmin.from('automated_message_log').insert({
+            template_name: templateName,
+            language: templateLanguage,
+            lead_id: lead.lead_id,
+            conversation_id: lead.conversation_id,
+            contact_id: lead.contact_id,
+            unit_id: unitId,
+            reason,
+            status: 'failed',
+            error_message: sendResult.error || 'Erro desconhecido',
+          });
+          console.error(`❌ [AUTOMATION] Falha lead=${lead.lead_id} unit=${unitId}: ${sendResult.error}`);
+        }
+      }
+
+      // Move leads que já receberam todos os templates para base_fria
+      const moveRes = await supabaseAdmin.rpc('move_leads_to_base_fria', { p_unit_id: unitId });
+      const movedToBaseFria = moveRes?.error ? 0 : (moveRes.data as number) || 0;
+
+      totalsByUnit.push({
+        unit_id: unitId,
+        sent_today_before: sentToday,
+        processed: eligible.length,
+        ok: okCount,
+        failed: failCount,
+        moved_to_base_fria: movedToBaseFria,
+        cap_remaining_after: remaining - eligible.length,
+      });
+    }
+
+    const elapsed = Date.now() - startedAt;
+    console.log(`✅ [AUTOMATION] Concluído em ${elapsed}ms:`, totalsByUnit);
+
+    return c.json({
+      success: true,
+      duration_ms: elapsed,
+      units: totalsByUnit,
+    });
+  } catch (error) {
+    console.error('❌ [AUTOMATION] Exceção:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Erro desconhecido',
     }, 500);
   }
 });
@@ -1801,9 +2126,12 @@ app.get("/make-server-844b77a1/api/conversations", async (c) => {
     // Batch: última mensagem de cada conversa (1 query em vez de 50)
     let lastMessagesByConvId: Record<string, any> = {};
     if (convIds.length > 0) {
-      const { data: allLastMessages } = await supabaseAdmin.rpc('get_last_messages_batch', {
+      // 🔥 FIX: PostgrestFilterBuilder em supabase-js v2 não é Promise — não tem .catch().
+      //         Tratar erros via { error } do retorno em vez de .catch().
+      const rpcResult = await supabaseAdmin.rpc('get_last_messages_batch', {
         conv_ids: convIds
-      }).catch(() => ({ data: null }));
+      });
+      const allLastMessages = rpcResult?.error ? null : rpcResult.data;
 
       // Fallback: se a RPC não existir, usar query manual otimizada
       if (!allLastMessages) {
@@ -2249,10 +2577,17 @@ app.get("/make-server-844b77a1/api/contacts", async (c) => {
         message: 'Usuário sem permissão de acesso aos contatos'
       });
     }
-    // 📌 REGRA 1: ATENDENTE - vê apenas contatos sob sua responsabilidade
+    // 📌 REGRA 1: ATENDENTE - vê todos os contatos da unidade
     else if (cargo === 'Atendente') {
-      console.log('🔒 [CONTACTS] Filtro ATENDENTE: id_profile_responsavel =', userId);
-      contactsQuery = contactsQuery.eq('id_profile_responsavel', userId);
+      if (!unidadeId) {
+        console.warn('⚠️ [CONTACTS] Atendente sem unidade definida');
+        return c.json({
+          success: false,
+          error: 'Atendente sem unidade definida'
+        }, 400);
+      }
+      console.log('🔒 [CONTACTS] Filtro ATENDENTE: unit_id =', unidadeId);
+      contactsQuery = contactsQuery.eq('unit_id', unidadeId);
     }
     // 📌 REGRA 2: SUPERVISOR/GERENTE - vê todos contatos da unidade
     else if (cargo === 'Supervisor' || cargo === 'Gerente') {

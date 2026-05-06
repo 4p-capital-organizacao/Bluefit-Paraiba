@@ -9,6 +9,8 @@ import type { DateRange } from 'react-day-picker';
 import { supabase } from '@/app/lib/supabase';
 import { format, subDays, startOfDay, parseISO, differenceInMinutes, eachDayOfInterval, differenceInDays } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { AlertsAttentionPanel } from '@/app/components/AlertsAttentionPanel';
+import { FunnelPanel } from '@/app/components/FunnelPanel';
 
 interface MetricCard {
   title: string;
@@ -709,20 +711,41 @@ export function DashboardModule() {
     const origemCounts: Record<string, number> = {};
 
     leads.forEach(lead => {
-      const origem = lead.origem || 'Sem Origem';
+      const origem = normalizeOrigem(lead.origem);
       origemCounts[origem] = (origemCounts[origem] || 0) + 1;
     });
 
     const total = leads.length;
-    const data = Object.entries(origemCounts)
-      .map(([name, value]) => ({
-        name,
-        value,
-        percentage: total > 0 ? ((value / total) * 100).toFixed(1) : '0',
-      }))
+    const sorted = Object.entries(origemCounts)
+      .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value);
 
+    const TOP_N = 8;
+    const top = sorted.slice(0, TOP_N);
+    const rest = sorted.slice(TOP_N);
+    const grouped = rest.length > 0
+      ? [...top, { name: 'Outros', value: rest.reduce((sum, r) => sum + r.value, 0) }]
+      : top;
+
+    const data = grouped.map(({ name, value }) => ({
+      name,
+      value,
+      percentage: total > 0 ? ((value / total) * 100).toFixed(1) : '0',
+    }));
+
     setLeadsByOrigem(data);
+  }
+
+  function normalizeOrigem(raw: unknown): string {
+    if (!raw || typeof raw !== 'string') return 'Sem Origem';
+    const trimmed = raw.trim();
+    if (!trimmed) return 'Sem Origem';
+    try {
+      const url = new URL(trimmed);
+      return `${url.host}${url.pathname.replace(/\/+$/, '')}` || url.host;
+    } catch {
+      return trimmed.length > 40 ? trimmed.slice(0, 40) + '…' : trimmed;
+    }
   }
 
   function calculateTagsByCount(tagRows: any[]) {
@@ -938,6 +961,12 @@ export function DashboardModule() {
             </Card>
           ))}
         </div>
+
+        {/* H1.3: Painel de Atenção (alerts SLA não resolvidos) */}
+        <AlertsAttentionPanel selectedUnit={selectedUnit} />
+
+        {/* H1.4: Funil de Conversão */}
+        <FunnelPanel selectedUnit={selectedUnit} dateRange={dateRange} />
 
         {/* ── ROW 1: Atividade Diária + Status das Conversas ── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

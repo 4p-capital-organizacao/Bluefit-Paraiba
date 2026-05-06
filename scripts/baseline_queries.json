@@ -1,0 +1,10 @@
+[
+  ["funnel_lifetime", "SELECT situacao, COUNT(*) AS total, ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1) AS pct FROM leads GROUP BY situacao ORDER BY CASE situacao WHEN 'novo' THEN 1 WHEN 'contato_feito' THEN 2 WHEN 'visita_agendada' THEN 3 WHEN 'visita_realizada' THEN 4 WHEN 'matriculado' THEN 5 WHEN 'visita_cancelada' THEN 6 WHEN 'perdido' THEN 7 ELSE 99 END"],
+  ["funnel_30d", "SELECT situacao, COUNT(*) AS total, ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1) AS pct FROM leads WHERE created_at >= NOW() - INTERVAL '30 days' GROUP BY situacao ORDER BY CASE situacao WHEN 'novo' THEN 1 WHEN 'contato_feito' THEN 2 WHEN 'visita_agendada' THEN 3 WHEN 'visita_realizada' THEN 4 WHEN 'matriculado' THEN 5 WHEN 'visita_cancelada' THEN 6 WHEN 'perdido' THEN 7 ELSE 99 END"],
+  ["top_origens", "SELECT COALESCE(NULLIF(TRIM(origem_norm), ''), '(sem origem)') AS origem, COUNT(*) AS total FROM (SELECT CASE WHEN origem ~ '^https?://' THEN regexp_replace(regexp_replace(origem, '\\?.*$', ''), '/$', '') ELSE origem END AS origem_norm FROM leads) sub GROUP BY origem_norm ORDER BY total DESC LIMIT 15"],
+  ["responsavel_preenchido", "SELECT COUNT(*) FILTER (WHERE responsavel IS NOT NULL AND TRIM(responsavel) != '') AS com_responsavel, COUNT(*) FILTER (WHERE responsavel IS NULL OR TRIM(responsavel) = '') AS sem_responsavel, COUNT(*) AS total FROM leads"],
+  ["conversas_status", "SELECT status, COUNT(*) AS total, COUNT(*) FILTER (WHERE assigned_user_id IS NULL) AS sem_atribuicao FROM conversations GROUP BY status ORDER BY total DESC"],
+  ["distribuicao_unidade", "SELECT u.id AS unit_id, u.name AS unit_name, (SELECT COUNT(*) FROM leads WHERE id_unidade = u.id) AS leads, (SELECT COUNT(*) FROM conversations WHERE unit_id = u.id) AS conversations, (SELECT COUNT(*) FROM contacts WHERE unit_id = u.id) AS contacts, (SELECT COUNT(*) FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE c.unit_id = u.id) AS messages FROM units u ORDER BY u.id"],
+  ["leads_sem_unidade", "SELECT COUNT(*) AS total FROM leads WHERE id_unidade IS NULL"],
+  ["conversas_sem_unidade", "SELECT COUNT(*) AS total FROM conversations WHERE unit_id IS NULL"]
+]
