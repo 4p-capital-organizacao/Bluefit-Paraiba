@@ -709,20 +709,41 @@ export function DashboardModule() {
     const origemCounts: Record<string, number> = {};
 
     leads.forEach(lead => {
-      const origem = lead.origem || 'Sem Origem';
+      const origem = normalizeOrigem(lead.origem);
       origemCounts[origem] = (origemCounts[origem] || 0) + 1;
     });
 
     const total = leads.length;
-    const data = Object.entries(origemCounts)
-      .map(([name, value]) => ({
-        name,
-        value,
-        percentage: total > 0 ? ((value / total) * 100).toFixed(1) : '0',
-      }))
+    const sorted = Object.entries(origemCounts)
+      .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value);
 
+    const TOP_N = 8;
+    const top = sorted.slice(0, TOP_N);
+    const rest = sorted.slice(TOP_N);
+    const grouped = rest.length > 0
+      ? [...top, { name: 'Outros', value: rest.reduce((sum, r) => sum + r.value, 0) }]
+      : top;
+
+    const data = grouped.map(({ name, value }) => ({
+      name,
+      value,
+      percentage: total > 0 ? ((value / total) * 100).toFixed(1) : '0',
+    }));
+
     setLeadsByOrigem(data);
+  }
+
+  function normalizeOrigem(raw: unknown): string {
+    if (!raw || typeof raw !== 'string') return 'Sem Origem';
+    const trimmed = raw.trim();
+    if (!trimmed) return 'Sem Origem';
+    try {
+      const url = new URL(trimmed);
+      return `${url.host}${url.pathname.replace(/\/+$/, '')}` || url.host;
+    } catch {
+      return trimmed.length > 40 ? trimmed.slice(0, 40) + '…' : trimmed;
+    }
   }
 
   function calculateTagsByCount(tagRows: any[]) {
