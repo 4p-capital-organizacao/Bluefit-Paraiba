@@ -47,6 +47,27 @@ function getTimeInCurrentStatus(lead: LeadWithDetails): string {
   return getTimeAgo(lead.created_at);
 }
 
+// Encurta URLs longas com UTMs — mostra só host + 1 segmento, sem query.
+// Texto livre passa intacto (truncate via CSS).
+function formatOrigem(origem: string): string {
+  if (!origem) return '';
+  const cleaned = origem.trim();
+  const looksLikeUrl =
+    /^https?:\/\//i.test(cleaned) ||
+    /^[a-z0-9-]+\.[a-z]{2,}/i.test(cleaned); // ex: "o.com.br/campina?..."
+  if (!looksLikeUrl) return cleaned;
+  try {
+    const withProto = /^https?:\/\//i.test(cleaned) ? cleaned : 'https://' + cleaned;
+    const u = new URL(withProto);
+    const firstSegment = u.pathname.split('/').filter(Boolean)[0];
+    return u.hostname + (firstSegment ? '/' + firstSegment : '');
+  } catch {
+    // Fallback: cortar antes do ? e limitar tamanho
+    const beforeQuery = cleaned.split('?')[0];
+    return beforeQuery.length > 32 ? beforeQuery.slice(0, 32) + '…' : beforeQuery;
+  }
+}
+
 const ITEM_TYPE = 'LEAD';
 
 const statusConfig: Record<LeadStatus, { label: string; color: string; bgColor: string }> = {
@@ -173,9 +194,12 @@ function LeadCard({ lead, onLeadClick, onWhatsAppClick }: LeadCardProps) {
       {(lead.origem || (lead.pontuacao !== null && lead.pontuacao !== undefined) || lead.classificacao) && (
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           {lead.origem && (
-            <span className="flex items-center gap-1 text-xs text-slate-500">
+            <span
+              className="flex items-center gap-1 text-xs text-slate-500 min-w-0 max-w-full"
+              title={lead.origem}
+            >
               <MapPin className="w-3 h-3 flex-shrink-0" />
-              {lead.origem}
+              <span className="truncate">{formatOrigem(lead.origem)}</span>
             </span>
           )}
           {lead.pontuacao !== null && lead.pontuacao !== undefined && (
