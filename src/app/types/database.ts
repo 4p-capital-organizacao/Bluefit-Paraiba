@@ -157,13 +157,14 @@ export interface WhatsAppTemplate {
 }
 
 // 🎯 CRM - Leads
-export type LeadStatus = 
-  | 'novo' 
-  | 'contato_feito' 
-  | 'visita_agendada' 
-  | 'visita_realizada' 
-  | 'visita_cancelada' 
-  | 'matriculado' 
+export type LeadStatus =
+  | 'novo'
+  | 'contato_feito'
+  | 'visita_agendada'
+  | 'visita_realizada'
+  | 'visita_cancelada'
+  | 'matriculado'
+  | 'base_fria'
   | 'perdido';
 
 export interface Lead {
@@ -195,4 +196,10 @@ export interface Lead {
 export interface LeadWithDetails extends Lead {
   unit?: Unit | null;
   lastMessageDirection?: 'inbound' | 'outbound' | null;
+  // 🔄 H2.2: timestamp se o lead voltou de base_fria pra contato_feito
+  reactivated_at?: string | null;
+  // 🔢 H2.2: quantos templates automáticos de follow-up já foram enviados
+  followup_count?: number;
+  // ✨ H2.2: indica se o lead foi reativado nos últimos 14 dias
+  recently_reactivated?: boolean;
 }

@@ -1,9 +1,10 @@
 import { LeadWithDetails, LeadStatus } from '../../types/database';
-import { User, Phone, Mail, Calendar, MapPin, Clock, Star, Award } from 'lucide-react';
+import { User, Phone, Mail, Calendar, MapPin, Clock, Star, Award, RotateCcw } from 'lucide-react';
 import { useDrag, useDrop } from 'react-dnd';
 import { Badge } from '../ui/badge';
 import { cn } from '../ui/utils';
 import { useRef } from 'react';
+import { FollowupStepper } from './FollowupStepper';
 
 // SVG inline do ícone WhatsApp (sem dependência externa)
 function WhatsAppIcon({ className }: { className?: string }) {
@@ -74,15 +75,20 @@ const statusConfig: Record<LeadStatus, { label: string; color: string; bgColor: 
     color: 'text-orange-700', 
     bgColor: 'bg-orange-50 border-orange-200' 
   },
-  matriculado: { 
-    label: 'Matriculado', 
-    color: 'text-green-700', 
-    bgColor: 'bg-green-50 border-green-200' 
+  matriculado: {
+    label: 'Matriculado',
+    color: 'text-green-700',
+    bgColor: 'bg-green-50 border-green-200'
   },
-  perdido: { 
-    label: 'Perdido', 
-    color: 'text-red-700', 
-    bgColor: 'bg-red-50 border-red-200' 
+  base_fria: {
+    label: 'Base fria',
+    color: 'text-slate-600',
+    bgColor: 'bg-slate-100 border-slate-300'
+  },
+  perdido: {
+    label: 'Perdido',
+    color: 'text-red-700',
+    bgColor: 'bg-red-50 border-red-200'
   },
 };
 
@@ -93,7 +99,8 @@ const columns: LeadStatus[] = [
   'visita_realizada',
   'visita_cancelada',
   'matriculado',
-  'perdido'
+  'base_fria',
+  'perdido',
 ];
 
 // Componente do Card arrastável
@@ -125,7 +132,18 @@ function LeadCard({ lead, onLeadClick, onWhatsAppClick }: LeadCardProps) {
     >
       {/* Nome + WhatsApp Button */}
       <h4 className="font-bold text-slate-900 mb-2 flex items-center justify-between gap-2">
-        <span className="truncate">{lead.nome_completo}</span>
+        <span className="truncate flex items-center gap-1.5">
+          {lead.nome_completo}
+          {lead.recently_reactivated && (
+            <span
+              className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200"
+              title="Lead voltou da Base fria — cliente respondeu"
+            >
+              <RotateCcw className="w-2.5 h-2.5" />
+              REATIVADO
+            </span>
+          )}
+        </span>
         <div className="flex items-center gap-1.5 flex-shrink-0">
           {/* Botão WhatsApp */}
           {lead.telefone && onWhatsAppClick && (
@@ -206,6 +224,18 @@ function LeadCard({ lead, onLeadClick, onWhatsAppClick }: LeadCardProps) {
             </span>
           </div>
         )}
+
+        {/* Stepper de follow-ups (mostra só se já recebeu pelo menos 1 ou está em base_fria) */}
+        {(lead.followup_count != null && lead.followup_count > 0) || lead.situacao === 'base_fria' ? (
+          <div className="pt-2 mt-2 border-t border-slate-100 flex items-center gap-2">
+            <span className="text-[9px] text-slate-500 uppercase font-semibold tracking-wide">Follow-ups</span>
+            <FollowupStepper
+              count={lead.followup_count || 0}
+              total={3}
+              exhausted={lead.situacao === 'base_fria'}
+            />
+          </div>
+        ) : null}
 
         {/* Rodapé: Data de criação (esq) | Tempo na situação (dir) */}
         <div className="flex items-center justify-between gap-2 pt-2 mt-2 border-t border-slate-100">

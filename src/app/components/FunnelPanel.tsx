@@ -22,7 +22,7 @@ import { Button } from './ui/button';
 import { cn } from './ui/utils';
 
 const STAGE_ORDER = ['novo', 'contato_feito', 'visita_agendada', 'visita_realizada', 'matriculado'] as const;
-const SIDE_STAGES = ['visita_cancelada', 'perdido'] as const;
+const SIDE_STAGES = ['visita_cancelada', 'base_fria', 'perdido'] as const;
 type StageKey = (typeof STAGE_ORDER)[number] | (typeof SIDE_STAGES)[number];
 
 const STAGE_LABEL: Record<string, string> = {
@@ -32,6 +32,7 @@ const STAGE_LABEL: Record<string, string> = {
   visita_realizada: 'Visita realizada',
   matriculado: 'Matriculado',
   visita_cancelada: 'Visita cancelada',
+  base_fria: 'Base fria',
   perdido: 'Perdido',
 };
 
@@ -42,6 +43,7 @@ const STAGE_COLOR: Record<string, string> = {
   visita_realizada: '#d97706',
   matriculado: '#10b981',
   visita_cancelada: '#94a3b8',
+  base_fria: '#64748b',
   perdido: '#ef4444',
 };
 
@@ -225,7 +227,7 @@ export function FunnelPanel({ selectedUnit, dateRange }: FunnelPanelProps) {
     // Motivos de perda
     const motivosMap: Record<string, number> = {};
     for (const l of leads) {
-      if ((l.situacao === 'perdido' || l.situacao === 'visita_cancelada') && l.motivo_cancelamento) {
+      if ((l.situacao === 'perdido' || l.situacao === 'visita_cancelada' || l.situacao === 'base_fria') && l.motivo_cancelamento) {
         const m = l.motivo_cancelamento.trim();
         motivosMap[m] = (motivosMap[m] || 0) + 1;
       }
@@ -244,7 +246,7 @@ export function FunnelPanel({ selectedUnit, dateRange }: FunnelPanelProps) {
       }
       responsibleMap[r].total++;
       if (l.situacao === 'matriculado') responsibleMap[r].matriculados++;
-      if (l.situacao === 'perdido' || l.situacao === 'visita_cancelada') responsibleMap[r].perdidos++;
+      if (l.situacao === 'perdido' || l.situacao === 'visita_cancelada' || l.situacao === 'base_fria') responsibleMap[r].perdidos++;
     }
     const rankingArr = Object.values(responsibleMap)
       .map((r) => ({ ...r, conversionRate: r.total > 0 ? (r.matriculados / r.total) * 100 : 0 }))

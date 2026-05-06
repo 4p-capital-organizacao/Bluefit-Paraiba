@@ -41,6 +41,10 @@ interface UnitOverview {
   template_language: string;
   sent_today: number;
   settings_updated_at: string | null;
+  // H2.2
+  max_followup_envios?: number;
+  move_to_base_fria_enabled?: boolean;
+  move_to_base_fria_after_days?: number;
 }
 
 interface DraftSettings {
@@ -50,6 +54,10 @@ interface DraftSettings {
   resend_after_days: number | null;
   template_name: string;
   template_language: string;
+  // H2.2
+  max_followup_envios: number;
+  move_to_base_fria_enabled: boolean;
+  move_to_base_fria_after_days: number;
 }
 
 export function AutomationPanel() {
@@ -82,6 +90,9 @@ export function AutomationPanel() {
         resend_after_days: r.resend_after_days,
         template_name: r.template_name,
         template_language: r.template_language,
+        max_followup_envios: r.max_followup_envios ?? 3,
+        move_to_base_fria_enabled: r.move_to_base_fria_enabled ?? true,
+        move_to_base_fria_after_days: r.move_to_base_fria_after_days ?? 7,
       };
     }
     setDrafts(initial);
@@ -104,7 +115,10 @@ export function AutomationPanel() {
       draft.threshold_hours !== cur.threshold_hours ||
       draft.resend_after_days !== cur.resend_after_days ||
       draft.template_name !== cur.template_name ||
-      draft.template_language !== cur.template_language
+      draft.template_language !== cur.template_language ||
+      draft.max_followup_envios !== (cur.max_followup_envios ?? 3) ||
+      draft.move_to_base_fria_enabled !== (cur.move_to_base_fria_enabled ?? true) ||
+      draft.move_to_base_fria_after_days !== (cur.move_to_base_fria_after_days ?? 7)
     );
   }
 
@@ -282,6 +296,18 @@ export function AutomationPanel() {
                     <p className="text-[10px] text-[#9CA3AF] mt-0.5">0 = não reenvia</p>
                   </div>
                   <div>
+                    <Label className="text-[11px] text-[#6B7280]">Máx. envios por lead</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={5}
+                      value={draft.max_followup_envios}
+                      onChange={(e) => update(u.unit_id, { max_followup_envios: Number(e.target.value) })}
+                      className="h-9 text-sm"
+                    />
+                    <p className="text-[10px] text-[#9CA3AF] mt-0.5">3 envios = padrão</p>
+                  </div>
+                  <div>
                     <Label className="text-[11px] text-[#6B7280]">Template</Label>
                     <Select
                       value={`${draft.template_name}|${draft.template_language}`}
@@ -322,6 +348,35 @@ export function AutomationPanel() {
                         </span>
                       )}
                     </p>
+                  </div>
+                </div>
+
+                {/* Base fria — H2.2 */}
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex-1">
+                    <Label className="text-xs font-semibold text-slate-700 cursor-pointer flex items-center gap-2">
+                      Mover para "Base fria" após {draft.max_followup_envios} envios sem resposta
+                      <Switch
+                        checked={draft.move_to_base_fria_enabled}
+                        onCheckedChange={(v) => update(u.unit_id, { move_to_base_fria_enabled: v })}
+                      />
+                    </Label>
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Lead vai pra base_fria depois de N dias do último template sem inbound do cliente.
+                      Cliente respondendo, lead volta automaticamente para "contato_feito".
+                    </p>
+                  </div>
+                  <div>
+                    <Label className="text-[11px] text-slate-500">Após (dias)</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={60}
+                      value={draft.move_to_base_fria_after_days}
+                      onChange={(e) => update(u.unit_id, { move_to_base_fria_after_days: Number(e.target.value) })}
+                      disabled={!draft.move_to_base_fria_enabled}
+                      className="h-9 text-sm w-20"
+                    />
                   </div>
                 </div>
 

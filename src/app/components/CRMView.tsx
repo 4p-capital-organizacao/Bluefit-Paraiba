@@ -194,7 +194,7 @@ export function CRMView() {
         return;
       }
 
-      const validStatuses = ['novo', 'contato_feito', 'visita_agendada', 'visita_realizada', 'visita_cancelada', 'matriculado', 'perdido'];
+      const validStatuses = ['novo', 'contato_feito', 'visita_agendada', 'visita_realizada', 'visita_cancelada', 'matriculado', 'base_fria', 'perdido'];
 
       // IDs de leads que precisam de correção no banco
       const leadsToFix: string[] = [];
@@ -232,6 +232,30 @@ export function CRMView() {
       // Setar leads imediatamente para renderizar cards
       setLeads(enrichedLeads);
       setLoading(false); // Desbloquear renderização dos cards
+
+      // ── 🔄 H2.2: enriquecer com follow-up summary (count + reactivated) em BATCH ──
+      try {
+        const leadIds = enrichedLeads.map(l => l.id);
+        if (leadIds.length > 0) {
+          const { data: summary } = await supabase
+            .from('lead_followup_summary')
+            .select('lead_id, followup_count, reactivated_at, recently_reactivated')
+            .in('lead_id', leadIds);
+
+          if (summary && summary.length > 0) {
+            const byId = new Map(summary.map((s: any) => [s.lead_id, s]));
+            setLeads(prev => prev.map(l => {
+              const s = byId.get(l.id);
+              return s
+                ? { ...l, followup_count: s.followup_count, reactivated_at: s.reactivated_at, recently_reactivated: s.recently_reactivated }
+                : l;
+            }));
+          }
+        }
+      } catch (e) {
+        // Não quebra renderização se a view falhar
+        console.warn('[CRMView] lead_followup_summary fetch falhou:', e);
+      }
 
       // ── 🚀 OTIMIZAÇÃO: Buscar direção da última mensagem em BATCH (async, não bloqueia renderização) ──
       try {

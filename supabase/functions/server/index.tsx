@@ -1226,12 +1226,17 @@ app.post("/make-server-844b77a1/api/automation/run-followup", async (c) => {
         }
       }
 
+      // Move leads que já receberam todos os templates para base_fria
+      const moveRes = await supabaseAdmin.rpc('move_leads_to_base_fria', { p_unit_id: unitId });
+      const movedToBaseFria = moveRes?.error ? 0 : (moveRes.data as number) || 0;
+
       totalsByUnit.push({
         unit_id: unitId,
         sent_today_before: sentToday,
         processed: eligible.length,
         ok: okCount,
         failed: failCount,
+        moved_to_base_fria: movedToBaseFria,
         cap_remaining_after: remaining - eligible.length,
       });
     }
