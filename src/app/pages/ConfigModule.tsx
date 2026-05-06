@@ -2,9 +2,10 @@ import { useState, useEffect, useMemo } from 'react';
 import {
   Users, Search, Save, X, Loader2, Edit2, Clock, Building,
   ChevronDown, ChevronRight, Shield, ShieldCheck, ShieldAlert,
-  UserCheck, UserX, Filter, AlertTriangle, Lock,
+  UserCheck, UserX, Filter, AlertTriangle, Lock, Zap,
 } from 'lucide-react';
 import { MenuPermissionsPanel } from '@/app/components/MenuPermissionsPanel';
+import { AutomationPanel } from '@/app/components/AutomationPanel';
 import { Button } from '@/app/components/ui/button';
 import { Input } from '@/app/components/ui/input';
 import { Label } from '@/app/components/ui/label';
@@ -464,10 +465,14 @@ export function ConfigModule() {
 
         {/* Tabs */}
         <Tabs defaultValue="users" className="space-y-6">
-          <TabsList className={`grid w-full ${isFullAdmin ? 'grid-cols-3' : 'grid-cols-1'} lg:w-auto lg:inline-grid`}>
+          <TabsList className={`grid w-full ${isFullAdmin ? 'grid-cols-4' : 'grid-cols-2'} lg:w-auto lg:inline-grid`}>
             <TabsTrigger value="users" className="gap-2">
               <Users className="w-4 h-4" />
               Usuários
+            </TabsTrigger>
+            <TabsTrigger value="automation" className="gap-2">
+              <Zap className="w-4 h-4" />
+              Automação
             </TabsTrigger>
             {isFullAdmin && (
               <TabsTrigger value="hours" className="gap-2">
@@ -760,6 +765,11 @@ export function ConfigModule() {
                 })}
               </div>
             )}
+          </TabsContent>
+
+          {/* ═══════════ TAB: AUTOMAÇÃO (Gerente+) ═══════════ */}
+          <TabsContent value="automation">
+            <AutomationPanel />
           </TabsContent>
 
           {/* ═══════════ TAB: HORÁRIO DE ATENDIMENTO (Admin only) ═══════════ */}

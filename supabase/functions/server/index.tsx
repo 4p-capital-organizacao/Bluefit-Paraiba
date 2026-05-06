@@ -1072,6 +1072,188 @@ app.post("/make-server-844b77a1/api/whatsapp/templates", authMiddleware, async (
 });
 
 /**
+ * POST /api/automation/run-followup
+ * Disparada por pg_cron via pg_net. Autentica via header X-Cron-Secret
+ * (env var BLUEDESK_CRON_SECRET).
+ *
+ * Para cada unidade com followup_enabled=true:
+ *   1. Verifica cap diário (sent_today < daily_cap)
+ *   2. Chama RPC eligible_followup_leads(unit_id, restante_do_cap)
+ *   3. Para cada lead: envia template via Meta API
+ *   4. Loga em automated_message_log
+ *   5. Salva mensagem outbound no banco (saveOutboundMessage)
+ */
+app.post("/make-server-844b77a1/api/automation/run-followup", async (c) => {
+  const expectedSecret = Deno.env.get('BLUEDESK_CRON_SECRET');
+  const providedSecret = c.req.header('X-Cron-Secret');
+
+  if (!expectedSecret) {
+    console.error('❌ [AUTOMATION] BLUEDESK_CRON_SECRET não configurado');
+    return c.json({ success: false, error: 'Secret não configurado no servidor' }, 500);
+  }
+  if (providedSecret !== expectedSecret) {
+    console.warn('⚠️ [AUTOMATION] X-Cron-Secret inválido');
+    return c.json({ success: false, error: 'Não autorizado' }, 401);
+  }
+
+  const startedAt = Date.now();
+  console.log('\n🤖 [AUTOMATION] Iniciando run-followup');
+
+  try {
+    // 1. Carrega unidades com automação ativa
+    const { data: units, error: unitsErr } = await supabaseAdmin
+      .from('unit_automation_settings')
+      .select('unit_id, daily_cap, template_name, template_language, followup_enabled')
+      .eq('followup_enabled', true);
+
+    if (unitsErr) {
+      console.error('❌ [AUTOMATION] Erro ao listar unidades ativas:', unitsErr);
+      return c.json({ success: false, error: unitsErr.message }, 500);
+    }
+
+    if (!units || units.length === 0) {
+      console.log('ℹ️ [AUTOMATION] Nenhuma unidade com automação ativa.');
+      return c.json({ success: true, processed: 0, units: [] });
+    }
+
+    const totalsByUnit: any[] = [];
+
+    for (const u of units) {
+      const unitId = (u as any).unit_id;
+      const cap = (u as any).daily_cap || 50;
+      const templateName = (u as any).template_name || 'followup_contato_feito_v1';
+      const templateLanguage = (u as any).template_language || 'pt_BR';
+
+      // 2. Conta envios de hoje
+      const todayRes = await supabaseAdmin.rpc('count_followups_today', { p_unit_id: unitId });
+      const sentToday = todayRes?.error ? 0 : (todayRes.data as number) || 0;
+      const remaining = Math.max(0, cap - sentToday);
+
+      if (remaining <= 0) {
+        console.log(`⏭️ [AUTOMATION] Unidade ${unitId}: cap diário atingido (${sentToday}/${cap})`);
+        totalsByUnit.push({ unit_id: unitId, sent_today: sentToday, processed: 0, skipped: 'daily_cap' });
+        continue;
+      }
+
+      // 3. Lista leads elegíveis (até remaining)
+      const eligibleRes = await supabaseAdmin.rpc('eligible_followup_leads', {
+        p_unit_id: unitId,
+        p_limit: remaining,
+      });
+
+      if (eligibleRes.error) {
+        console.error(`❌ [AUTOMATION] Erro eligible_followup_leads(unit=${unitId}):`, eligibleRes.error);
+        totalsByUnit.push({ unit_id: unitId, error: eligibleRes.error.message });
+        continue;
+      }
+
+      const eligible = (eligibleRes.data as any[]) || [];
+      console.log(`📋 [AUTOMATION] Unidade ${unitId}: ${eligible.length} leads elegíveis (cap restante ${remaining})`);
+
+      let okCount = 0;
+      let failCount = 0;
+
+      for (const lead of eligible) {
+        const phone = String(lead.phone || '').replace(/\+/g, '');
+        if (!phone) {
+          await supabaseAdmin.from('automated_message_log').insert({
+            template_name: templateName,
+            language: templateLanguage,
+            lead_id: lead.lead_id,
+            contact_id: lead.contact_id,
+            unit_id: unitId,
+            reason: 'sla_followup_72h',
+            status: 'skipped',
+            error_message: 'Lead sem telefone',
+          });
+          continue;
+        }
+
+        // Envia template via Meta
+        const sendResult = await whatsapp.sendWhatsAppTemplate({
+          to: phone,
+          templateName,
+          languageCode: templateLanguage,
+        });
+
+        const reason = (lead.envio_count && lead.envio_count > 0) ? 'sla_followup_reenvio_7d' : 'sla_followup_72h';
+
+        if (sendResult.success) {
+          okCount++;
+
+          // Loga sucesso
+          await supabaseAdmin.from('automated_message_log').insert({
+            template_name: templateName,
+            language: templateLanguage,
+            lead_id: lead.lead_id,
+            conversation_id: lead.conversation_id,
+            contact_id: lead.contact_id,
+            unit_id: unitId,
+            reason,
+            meta_message_id: sendResult.messageId,
+            status: 'sent',
+          });
+
+          // Salva mensagem outbound (aparece no chat)
+          if (lead.conversation_id) {
+            try {
+              await saveOutboundMessage({
+                conversationId: String(lead.conversation_id),
+                type: 'template',
+                body: `[${templateName}] (envio automático de follow-up)`,
+                providerMessageId: sendResult.messageId,
+                templateName,
+                toPhoneE164: phone,
+              });
+            } catch (saveErr) {
+              console.warn('⚠️ [AUTOMATION] saveOutboundMessage falhou (lead', lead.lead_id, '):', saveErr);
+            }
+          }
+        } else {
+          failCount++;
+          await supabaseAdmin.from('automated_message_log').insert({
+            template_name: templateName,
+            language: templateLanguage,
+            lead_id: lead.lead_id,
+            conversation_id: lead.conversation_id,
+            contact_id: lead.contact_id,
+            unit_id: unitId,
+            reason,
+            status: 'failed',
+            error_message: sendResult.error || 'Erro desconhecido',
+          });
+          console.error(`❌ [AUTOMATION] Falha lead=${lead.lead_id} unit=${unitId}: ${sendResult.error}`);
+        }
+      }
+
+      totalsByUnit.push({
+        unit_id: unitId,
+        sent_today_before: sentToday,
+        processed: eligible.length,
+        ok: okCount,
+        failed: failCount,
+        cap_remaining_after: remaining - eligible.length,
+      });
+    }
+
+    const elapsed = Date.now() - startedAt;
+    console.log(`✅ [AUTOMATION] Concluído em ${elapsed}ms:`, totalsByUnit);
+
+    return c.json({
+      success: true,
+      duration_ms: elapsed,
+      units: totalsByUnit,
+    });
+  } catch (error) {
+    console.error('❌ [AUTOMATION] Exceção:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Erro desconhecido',
+    }, 500);
+  }
+});
+
+/**
  * GET /api/whatsapp/templates/:name
  * Busca detalhes de um template específico
  */
