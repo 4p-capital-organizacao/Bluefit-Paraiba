@@ -20,8 +20,7 @@ interface FollowupStepperProps {
 }
 
 export function FollowupStepper({ count, total = 2, className, exhausted }: FollowupStepperProps) {
-  if (count <= 0 && !exhausted) return null; // não exibe se nunca foi tocado
-
+  // O caller decide se exibe ou não. O stepper apenas renderiza o estado.
   const safeCount = Math.min(Math.max(count, 0), total);
 
   return (
