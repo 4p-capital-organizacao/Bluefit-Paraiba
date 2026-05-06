@@ -166,7 +166,10 @@ function LeadCard({ lead, onLeadClick, onWhatsAppClick }: LeadCardProps) {
 
   const config = statusConfig[lead.situacao];
   const responsibleName = lead.responsavel?.trim();
-  const showFollowupStepper = (lead.followup_count != null && lead.followup_count > 0) || lead.situacao === 'base_fria';
+  // Stepper só faz sentido nas etapas do ciclo de follow-up (contato_feito ou base_fria)
+  // E só se o lead realmente recebeu pelo menos 1 template — caso contrário é ruído.
+  const isFollowupStage = lead.situacao === 'contato_feito' || lead.situacao === 'base_fria';
+  const showFollowupStepper = isFollowupStage && (lead.followup_count ?? 0) > 0;
   const hasInboundFresh = lead.lastMessageDirection === 'inbound';
 
   return (
