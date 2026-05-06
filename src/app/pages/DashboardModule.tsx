@@ -10,6 +10,7 @@ import { supabase } from '@/app/lib/supabase';
 import { format, subDays, startOfDay, parseISO, differenceInMinutes, eachDayOfInterval, differenceInDays } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { AlertsAttentionPanel } from '@/app/components/AlertsAttentionPanel';
+import { FunnelPanel } from '@/app/components/FunnelPanel';
 
 interface MetricCard {
   title: string;
@@ -963,6 +964,9 @@ export function DashboardModule() {
 
         {/* H1.3: Painel de Atenção (alerts SLA não resolvidos) */}
         <AlertsAttentionPanel selectedUnit={selectedUnit} />
+
+        {/* H1.4: Funil de Conversão */}
+        <FunnelPanel selectedUnit={selectedUnit} dateRange={dateRange} />
 
         {/* ── ROW 1: Atividade Diária + Status das Conversas ── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
