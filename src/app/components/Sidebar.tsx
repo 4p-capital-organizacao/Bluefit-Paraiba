@@ -91,23 +91,25 @@ export function Sidebar() {
     const hasCargo = userProfile.isLoaded && cargoLower !== 'sem cargo' && cargoLower !== '';
 
     if (hasCargo) {
+      const chatChildren: { id: ModuleId; label: string; icon: React.ComponentType<{ className?: string }>; path: string }[] = [
+        { id: 'contacts', label: 'Contatos', icon: UserPlus, path: '/contacts' },
+        { id: 'conversations', label: 'Conversas', icon: MessagesSquare, path: '/conversations' },
+      ];
+
+      // Templates: gated por menu_item_permissions (admin escolhe quais cargos veem)
+      if (canAccessModule('templates')) {
+        chatChildren.push({ id: 'templates', label: 'Templates', icon: FileText, path: '/templates' });
+      }
+
       items.push({
         id: 'conversations' as ModuleId,
         label: 'Chat ao vivo',
         icon: Headset,
-        children: [
-          { id: 'contacts', label: 'Contatos', icon: UserPlus, path: '/contacts' },
-          { id: 'conversations', label: 'Conversas', icon: MessagesSquare, path: '/conversations' },
-        ],
+        children: chatChildren,
       });
 
       // CRM: Atendente+
       items.push({ id: 'crm', label: 'CRM', icon: Users, path: '/crm' });
-    }
-
-    // Templates: gated por menu_item_permissions (admin escolhe quais cargos veem)
-    if (canAccessModule('templates')) {
-      items.push({ id: 'templates', label: 'Templates', icon: FileText, path: '/templates' });
     }
 
     // Configurações: Gerente+ (isManager) — Gerente vê apenas usuários da sua unidade
