@@ -668,7 +668,7 @@ export async function sendWhatsAppAudioMessage(
  * Busca todos os templates aprovados da conta WhatsApp Business
  * @returns Lista de templates da API da Meta
  */
-export async function fetchWhatsAppTemplates(): Promise<{
+export async function fetchWhatsAppTemplates(opts: { includeAllStatuses?: boolean } = {}): Promise<{
   success: boolean;
   templates?: MetaTemplate[];
   error?: string;
@@ -854,16 +854,15 @@ export async function fetchWhatsAppTemplates(): Promise<{
     }));
 
     // Filtrar apenas templates aprovados
-    const approvedTemplates = templates.filter(t => t.status === 'APPROVED');
+    const filteredTemplates = opts.includeAllStatuses
+      ? templates
+      : templates.filter(t => t.status === 'APPROVED');
 
-    console.log(`✅ Templates aprovados: ${approvedTemplates.length}`);
-    if (approvedTemplates.length > 0) {
-      console.log('📋 Templates:', approvedTemplates.map(t => `${t.name} (${t.language})`).join(', '));
-    }
+    console.log(`✅ Templates retornados: ${filteredTemplates.length} (${opts.includeAllStatuses ? 'todos status' : 'apenas APPROVED'})`);
 
     return {
       success: true,
-      templates: approvedTemplates
+      templates: filteredTemplates
     };
 
   } catch (error) {

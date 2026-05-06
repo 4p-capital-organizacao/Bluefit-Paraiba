@@ -1,7 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { FileText, Send, X, Info, Search, Settings2, Eye, CheckCircle2, ChevronLeft, Zap, Link as LinkIcon, Plus } from 'lucide-react';
-import { useUserProfile } from '../hooks/useUserProfile';
-import { CreateTemplateDialog } from './CreateTemplateDialog';
+import { FileText, Send, X, Info, Search, Settings2, Eye, CheckCircle2, ChevronLeft, Zap, Link as LinkIcon } from 'lucide-react';
 import { ConversationWithDetails, WhatsAppTemplate } from '../types/database';
 import { fetchAvailableTemplates, sendWhatsAppTemplate } from '../lib/whatsapp';
 import {
@@ -48,9 +46,6 @@ export function TemplateSelector({ conversation, onClose, onTemplateSent }: Temp
   const [headerMediaUrl, setHeaderMediaUrl] = useState<string>('');
   const [sending, setSending] = useState(false);
   const [mobileView, setMobileView] = useState<'list' | 'config'>('list');
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const { profile: userProfile } = useUserProfile();
-  const canCreateTemplate = userProfile.isLoaded && (userProfile.id_cargo ?? 0) >= 4; // Gerente+
 
   useEffect(() => {
     loadTemplates();
@@ -377,32 +372,11 @@ export function TemplateSelector({ conversation, onClose, onTemplateSent }: Temp
                 {conversation.contact.first_name} &bull; {conversation.contact.phone_number}
               </DrawerDescription>
             </div>
-            {canCreateTemplate && (
-              <Button
-                onClick={() => setShowCreateDialog(true)}
-                size="sm"
-                className="bg-white/10 hover:bg-white/20 text-white border border-white/20 text-xs h-7 rounded-md transition-all px-2.5"
-                title="Criar novo template (gerentes)"
-              >
-                <Plus className="w-3.5 h-3.5 mr-1" />
-                <span className="hidden sm:inline">Criar</span>
-              </Button>
-            )}
             <Button variant="ghost" size="icon" className="text-white hover:bg-white/10 rounded-full h-7 w-7" onClick={onClose}>
               <X className="w-4 h-4" />
             </Button>
           </div>
         </DrawerHeader>
-
-        {/* Dialog de criação de template (apenas gerentes+) */}
-        <CreateTemplateDialog
-          open={showCreateDialog}
-          onOpenChange={setShowCreateDialog}
-          onCreated={() => {
-            // refrescar lista após criar (mesmo que esteja PENDING, aparece como tal)
-            loadTemplates();
-          }}
-        />
 
         {/* Body: split layout */}
         <div className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden bg-slate-50">

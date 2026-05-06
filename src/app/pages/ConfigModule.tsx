@@ -2,8 +2,9 @@ import { useState, useEffect, useMemo } from 'react';
 import {
   Users, Search, Save, X, Loader2, Edit2, Clock, Building,
   ChevronDown, ChevronRight, Shield, ShieldCheck, ShieldAlert,
-  UserCheck, UserX, Filter, AlertTriangle,
+  UserCheck, UserX, Filter, AlertTriangle, Lock,
 } from 'lucide-react';
+import { MenuPermissionsPanel } from '@/app/components/MenuPermissionsPanel';
 import { Button } from '@/app/components/ui/button';
 import { Input } from '@/app/components/ui/input';
 import { Label } from '@/app/components/ui/label';
@@ -463,7 +464,7 @@ export function ConfigModule() {
 
         {/* Tabs */}
         <Tabs defaultValue="users" className="space-y-6">
-          <TabsList className={`grid w-full ${isFullAdmin ? 'grid-cols-2' : 'grid-cols-1'} lg:w-auto lg:inline-grid`}>
+          <TabsList className={`grid w-full ${isFullAdmin ? 'grid-cols-3' : 'grid-cols-1'} lg:w-auto lg:inline-grid`}>
             <TabsTrigger value="users" className="gap-2">
               <Users className="w-4 h-4" />
               Usuários
@@ -472,6 +473,12 @@ export function ConfigModule() {
               <TabsTrigger value="hours" className="gap-2">
                 <Clock className="w-4 h-4" />
                 Horário de Atendimento
+              </TabsTrigger>
+            )}
+            {isFullAdmin && (
+              <TabsTrigger value="permissions" className="gap-2">
+                <Lock className="w-4 h-4" />
+                Permissões de menu
               </TabsTrigger>
             )}
           </TabsList>
@@ -759,6 +766,13 @@ export function ConfigModule() {
           {isFullAdmin && (
             <TabsContent value="hours">
               <BusinessHours />
+            </TabsContent>
+          )}
+
+          {/* ═══════════ TAB: PERMISSÕES DE MENU (Admin only) ═══════════ */}
+          {isFullAdmin && (
+            <TabsContent value="permissions">
+              <MenuPermissionsPanel />
             </TabsContent>
           )}
         </Tabs>

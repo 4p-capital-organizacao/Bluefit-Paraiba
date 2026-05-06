@@ -941,7 +941,8 @@ app.get("/make-server-844b77a1/api/whatsapp/config-check", async (c) => {
  */
 app.get("/make-server-844b77a1/api/whatsapp/templates", async (c) => {
   const timestamp = new Date().toISOString();
-  
+  const includeAll = c.req.query('all') === '1';
+
   console.log('');
   console.log('╔════════════════════════════════════════════════════════════╗');
   console.log('║  🚀 ENDPOINT TEMPLATES - PÚBLICO                         ║');
@@ -950,9 +951,9 @@ app.get("/make-server-844b77a1/api/whatsapp/templates", async (c) => {
   console.log('');
 
   try {
-    console.log('📋 [PÚBLICO] Buscando templates da API da Meta...');
-    
-    const result = await whatsapp.fetchWhatsAppTemplates();
+    console.log(`📋 [PÚBLICO] Buscando templates da API da Meta (all=${includeAll})...`);
+
+    const result = await whatsapp.fetchWhatsAppTemplates({ includeAllStatuses: includeAll });
 
     console.log('📦 Resultado da busca:', {
       success: result.success,
@@ -997,7 +998,7 @@ app.post("/make-server-844b77a1/api/whatsapp/templates", authMiddleware, async (
   try {
     const userId = c.get('userId');
 
-    // Verificar cargo do usuário (>= 4 = Gerente ou Administrador)
+    // Verificar permissão via menu_item_permissions (admin pode reconfigurar via UI)
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('id, id_cargo, cargo:cargos!profiles_id_cargo_fkey(id, level, papeis)')
@@ -1009,11 +1010,28 @@ app.post("/make-server-844b77a1/api/whatsapp/templates", authMiddleware, async (
     }
 
     const cargoLevel = (profile.cargo as any)?.level ?? 0;
-    if (cargoLevel < 4) {
-      console.warn(`⚠️ [TEMPLATES] Acesso negado para userId=${userId} (cargo level=${cargoLevel})`);
+
+    // Consulta a tabela menu_item_permissions
+    const { data: perm, error: permErr } = await supabaseAdmin
+      .from('menu_item_permissions')
+      .select('required_cargo_levels')
+      .eq('module_key', 'templates')
+      .single();
+
+    if (permErr || !perm) {
+      console.warn(`⚠️ [TEMPLATES] menu_item_permissions sem registro para 'templates'`);
       return c.json({
         success: false,
-        error: 'Apenas Gerentes ou Administradores podem criar templates.'
+        error: 'Permissões do módulo Templates não configuradas. Peça ao administrador.'
+      }, 403);
+    }
+
+    const allowedLevels: number[] = perm.required_cargo_levels || [];
+    if (!allowedLevels.includes(cargoLevel)) {
+      console.warn(`⚠️ [TEMPLATES] Acesso negado userId=${userId} cargoLevel=${cargoLevel} permitidos=${JSON.stringify(allowedLevels)}`);
+      return c.json({
+        success: false,
+        error: 'Seu cargo não tem permissão para criar templates. Peça ao administrador.'
       }, 403);
     }
 

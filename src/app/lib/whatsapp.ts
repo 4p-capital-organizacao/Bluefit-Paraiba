@@ -147,10 +147,15 @@ export async function sendWhatsAppTemplate(
 
 /**
  * Busca templates disponíveis (VIA BACKEND - ENDPOINT PÚBLICO)
+ * @param opts.includeAllStatuses se true, retorna PENDING/REJECTED/APPROVED/etc.
+ *        Caso contrário (default), retorna apenas APPROVED (uso no envio).
  */
-export async function fetchAvailableTemplates(): Promise<WhatsAppTemplate[]> {
+export async function fetchAvailableTemplates(
+  opts: { includeAllStatuses?: boolean } = {},
+): Promise<WhatsAppTemplate[]> {
   try {
-    const url = `${SERVER_URL}/api/whatsapp/templates`;
+    const qs = opts.includeAllStatuses ? '?all=1' : '';
+    const url = `${SERVER_URL}/api/whatsapp/templates${qs}`;
 
     const response = await fetch(url, {
       method: 'GET',
@@ -167,15 +172,15 @@ export async function fetchAvailableTemplates(): Promise<WhatsAppTemplate[]> {
     const data = await response.json();
 
     if (data.success && data.templates && data.templates.length > 0) {
-      // Converter formato do backend para o formato do frontend
       return data.templates.map((t: any) => ({
         template_name: t.name || t.template_name,
         language: t.language,
         category: t.category,
-        components: t.components
+        components: t.components,
+        status: t.status,
       }));
     }
-    
+
     return [];
   } catch (error) {
     return [];

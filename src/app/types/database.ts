@@ -143,10 +143,12 @@ export interface WhatsAppTemplate {
   template_name: string;
   language: string;
   category: string;
+  status?: string; // APPROVED | PENDING | REJECTED | IN_APPEAL | DISABLED | PAUSED
   components?: Array<{
     type: string;
     format?: string;
     text?: string;
+    buttons?: Array<{ type: string; text: string }>;
     parameters?: Array<{
       type: string;
       text?: string;

@@ -20,6 +20,7 @@ const DashboardModule = lazy(() => import('./pages/DashboardModule').then(m => (
 const TeamDashboardModule = lazy(() => import('./pages/TeamDashboardModule').then(m => ({ default: m.TeamDashboardModule })));
 const CRMModule = lazy(() => import('./pages/CRMModule').then(m => ({ default: m.CRMModule })));
 const ConfigModule = lazy(() => import('./pages/ConfigModule').then(m => ({ default: m.ConfigModule })));
+const TemplatesModule = lazy(() => import('./pages/TemplatesModule').then(m => ({ default: m.TemplatesModule })));
 const ProfilePage = lazy(() => import('./pages/ProfilePage').then(m => ({ default: m.ProfilePage })));
 const NotificationsPage = lazy(() => import('./pages/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 const ErrorBoundary = lazy(() => import('./components/ErrorBoundary').then(m => ({ default: m.ErrorBoundary })));
@@ -170,6 +171,21 @@ function ConfigPage() {
   );
 }
 
+function TemplatesPage() {
+  // Guard via menu_item_permissions (em runtime). RoleGuard "attendant" como
+  // baseline: usuário precisa ter algum cargo válido. O check fino é o backend
+  // (POST templates) e o Sidebar (esconde o item de menu se não puder).
+  return (
+    <RoleGuard requiredRole="attendant">
+      <LazyPage>
+        <ErrorBoundary>
+          <TemplatesModule />
+        </ErrorBoundary>
+      </LazyPage>
+    </RoleGuard>
+  );
+}
+
 // --- Pagina 404 ---
 
 function NotFound() {
@@ -227,6 +243,7 @@ export const router = createBrowserRouter([
       { path: 'conversations', Component: ConversationsPage },
       { path: 'conversations/:conversationId', Component: ConversationsPage },
       { path: 'crm', Component: CRMPage },
+      { path: 'templates', Component: TemplatesPage },
       { path: 'config', Component: ConfigPage },
       {
         path: 'profile',
