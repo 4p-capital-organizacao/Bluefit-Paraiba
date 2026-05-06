@@ -990,6 +990,62 @@ app.get("/make-server-844b77a1/api/whatsapp/templates", async (c) => {
 });
 
 /**
+ * POST /api/whatsapp/templates
+ * Cria um novo template via API da Meta (apenas Gerentes/Admin — cargo >= 4)
+ */
+app.post("/make-server-844b77a1/api/whatsapp/templates", authMiddleware, async (c) => {
+  try {
+    const userId = c.get('userId');
+
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('id, id_cargo, cargo:cargos!profiles_id_cargo_fkey(id, level, papeis)')
+      .eq('id', userId)
+      .single();
+
+    if (profileError || !profile) {
+      return c.json({ success: false, error: 'Perfil não encontrado.' }, 403);
+    }
+
+    const cargoLevel = (profile.cargo as any)?.level ?? 0;
+    if (cargoLevel < 4) {
+      console.warn(`⚠️ [TEMPLATES] Acesso negado userId=${userId} cargo=${cargoLevel}`);
+      return c.json({ success: false, error: 'Apenas Gerentes ou Administradores podem criar templates.' }, 403);
+    }
+
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== 'object') {
+      return c.json({ success: false, error: 'Body inválido.' }, 400);
+    }
+
+    const input = {
+      name: typeof body.name === 'string' ? body.name.trim() : '',
+      language: typeof body.language === 'string' ? body.language.trim() : 'pt_BR',
+      category: body.category,
+      body: typeof body.body === 'string' ? body.body : '',
+      footer: typeof body.footer === 'string' ? body.footer.trim() : null,
+      buttons: Array.isArray(body.buttons)
+        ? body.buttons
+            .filter((b: any) => b && typeof b.text === 'string')
+            .map((b: any) => ({ type: 'QUICK_REPLY', text: String(b.text).trim() }))
+        : [],
+    };
+
+    const result = await whatsapp.createWhatsAppTemplate(input as any);
+    if (!result.success) {
+      return c.json({ success: false, error: result.error, details: result.details }, 400);
+    }
+    return c.json({ success: true, template: result.template }, 200);
+  } catch (error) {
+    console.error('❌ Exceção ao criar template:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Erro desconhecido',
+    }, 500);
+  }
+});
+
+/**
  * GET /api/whatsapp/templates/:name
  * Busca detalhes de um template específico
  */
