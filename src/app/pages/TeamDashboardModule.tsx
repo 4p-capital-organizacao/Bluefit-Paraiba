@@ -179,8 +179,9 @@ export function TeamDashboardModule() {
   async function loadData() {
     setLoading(true);
     try {
-      const isFullAdmin = userProfile.isFullAdmin;
-      const filterUnitIds = isFullAdmin ? [] : (activeUnitId ? [activeUnitId] : userUnitIds);
+      // Sempre filtra pelo activeUnitId selecionado no header (mesmo para admin):
+      // o objetivo do TeamDashboard é ter visão por unidade.
+      const filterUnitIds = activeUnitId ? [activeUnitId] : userUnitIds;
 
       const [conversations, messages, teamProfiles, contacts, tags] = await Promise.all([
         fetchAll('conversations',
@@ -201,15 +202,15 @@ export function TeamDashboardModule() {
         fetchAll('conversation_tags', 'conversation_id, tag:tags(id, name, color)'),
       ]);
 
-      // Filtrar por unidade
-      const fConversations = isFullAdmin ? conversations : conversations.filter((c: any) => filterUnitIds.includes(c.unit_id));
+      // Filtrar por unidade (sempre — admin/gerente/supervisor)
+      const fConversations = conversations.filter((c: any) => filterUnitIds.includes(c.unit_id));
       const fConvIds = new Set(fConversations.map((c: any) => c.id));
       const fMessages = messages.filter((m: any) => fConvIds.has(m.conversation_id));
-      const fContacts = isFullAdmin ? contacts : contacts.filter((c: any) => filterUnitIds.includes(c.unit_id));
+      const fContacts = contacts.filter((c: any) => filterUnitIds.includes(c.unit_id));
       const fTags = tags.filter((t: any) => fConvIds.has(t.conversation_id));
 
       // Operadores da unidade selecionada
-      const fTeam = isFullAdmin ? teamProfiles : teamProfiles.filter((p: any) => filterUnitIds.includes(p.id_unidade));
+      const fTeam = teamProfiles.filter((p: any) => filterUnitIds.includes(p.id_unidade));
       const ops = fTeam.map((p: any) => ({
         id: p.id,
         name: p.nome && p.sobrenome ? `${p.nome} ${p.sobrenome}` : p.email || 'Sem nome',
