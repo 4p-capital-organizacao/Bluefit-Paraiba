@@ -6,10 +6,13 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Clock, XCircle, RefreshCw, Search, FileText, Loader2, Copy, Smartphone, Check } from 'lucide-react';
+import { CheckCircle2, Clock, XCircle, RefreshCw, Search, FileText, Loader2, Copy, Smartphone, Check, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { fetchAvailableTemplates } from '../lib/whatsapp';
+import { supabase } from '../lib/supabase';
+import { projectId, publicAnonKey } from '/utils/supabase/info';
+import { useModulePermissions } from '../hooks/useModulePermissions';
 import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -58,12 +61,67 @@ export function TemplateListPanel() {
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [selectedTemplate, setSelectedTemplate] = useState<TemplateRow | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const { canAccess } = useModulePermissions();
+  const canDeleteTemplate = canAccess('templates');
 
   function copyToClipboard(text: string, fieldKey: string) {
     navigator.clipboard.writeText(text).then(() => {
       setCopiedField(fieldKey);
       setTimeout(() => setCopiedField((c) => (c === fieldKey ? null : c)), 1500);
     });
+  }
+
+  async function handleDelete(template: TemplateRow) {
+    if (deleting) return;
+    const confirmMsg =
+      `Excluir o template "${template.template_name}"?\n\n` +
+      `Isso remove TODAS as versões/idiomas desse template na Meta.\n` +
+      `Templates excluídos não podem ser recuperados — você precisaria criar de novo do zero.\n\n` +
+      `Confirma?`;
+    if (!window.confirm(confirmMsg)) return;
+
+    setDeleting(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) {
+        toast.error('Sessão expirada. Faça login novamente.');
+        return;
+      }
+
+      const url = `https://${projectId}.supabase.co/functions/v1/make-server-844b77a1/api/whatsapp/templates/${encodeURIComponent(template.template_name)}`;
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: publicAnonKey,
+          Authorization: `Bearer ${publicAnonKey}`,
+          'X-User-Token': accessToken,
+        },
+      });
+
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result?.success) {
+        toast.error('Não foi possível excluir', {
+          description: result?.error || `HTTP ${response.status}`,
+          duration: 8000,
+        });
+        return;
+      }
+
+      toast.success('Template excluído', {
+        description: `${template.template_name} removido da Meta.`,
+      });
+      setSelectedTemplate(null);
+      await load(true);
+    } catch (err: any) {
+      console.error('[TemplateListPanel] delete failed:', err);
+      toast.error('Erro inesperado', { description: err?.message });
+    } finally {
+      setDeleting(false);
+    }
   }
 
   const load = useCallback(async (showToast = false) => {
@@ -378,6 +436,35 @@ export function TemplateListPanel() {
                             </li>
                           ))}
                         </ul>
+                      </section>
+                    )}
+
+                    {/* Zona perigosa — Excluir template (apenas para quem tem permissão) */}
+                    {canDeleteTemplate && (
+                      <section className="mt-2 pt-3 border-t border-red-100">
+                        <p className="text-[10px] uppercase tracking-wide text-red-600 font-semibold mb-1.5">
+                          Zona perigosa
+                        </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleDelete(t)}
+                          disabled={deleting}
+                          className="border-red-200 text-red-700 hover:bg-red-50 hover:border-red-300 hover:text-red-800 h-8 text-xs"
+                        >
+                          {deleting ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
+                          ) : (
+                            <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                          )}
+                          Excluir template
+                        </Button>
+                        <p className="text-[10px] text-[#9CA3AF] mt-1.5 leading-snug">
+                          Remove o template da Meta (todas as línguas). Não pode ser desfeito —
+                          você teria que criar de novo. Útil para templates de promoção
+                          temporários que ficaram obsoletos.
+                        </p>
                       </section>
                     )}
                   </div>

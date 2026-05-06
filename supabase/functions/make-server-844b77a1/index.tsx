@@ -1072,6 +1072,62 @@ app.post("/make-server-844b77a1/api/whatsapp/templates", authMiddleware, async (
 });
 
 /**
+ * DELETE /api/whatsapp/templates/:name
+ * Apaga template na Meta (todas as línguas com esse nome). Restrito por
+ * menu_item_permissions['templates'].
+ */
+app.delete("/make-server-844b77a1/api/whatsapp/templates/:name", authMiddleware, async (c) => {
+  try {
+    const userId = c.get('userId');
+    const templateName = c.req.param('name');
+
+    if (!templateName) {
+      return c.json({ success: false, error: 'Nome do template não informado.' }, 400);
+    }
+
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('id, id_cargo, cargo:cargos!profiles_id_cargo_fkey(id, level, papeis)')
+      .eq('id', userId)
+      .single();
+
+    if (profileError || !profile) {
+      return c.json({ success: false, error: 'Perfil não encontrado.' }, 403);
+    }
+    const cargoLevel = (profile.cargo as any)?.level ?? 0;
+
+    const { data: perm } = await supabaseAdmin
+      .from('menu_item_permissions')
+      .select('required_cargo_levels')
+      .eq('module_key', 'templates')
+      .single();
+
+    const allowedLevels: number[] = (perm as any)?.required_cargo_levels || [];
+    if (!allowedLevels.includes(cargoLevel)) {
+      console.warn(`⚠️ [TEMPLATES][DELETE] Acesso negado userId=${userId} cargoLevel=${cargoLevel}`);
+      return c.json({
+        success: false,
+        error: 'Seu cargo não tem permissão para excluir templates.'
+      }, 403);
+    }
+
+    console.log(`🗑️ [TEMPLATES][DELETE] userId=${userId} cargoLevel=${cargoLevel} name=${templateName}`);
+
+    const result = await whatsapp.deleteWhatsAppTemplate(templateName);
+    if (!result.success) {
+      return c.json({ success: false, error: result.error, details: result.details }, 400);
+    }
+    return c.json({ success: true }, 200);
+  } catch (error) {
+    console.error('❌ Exceção ao deletar template:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Erro desconhecido',
+    }, 500);
+  }
+});
+
+/**
  * POST /api/automation/run-followup
  * Disparada por pg_cron via pg_net. Autentica via header X-Cron-Secret
  * (env var BLUEDESK_CRON_SECRET).

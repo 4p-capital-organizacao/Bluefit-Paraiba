@@ -1037,3 +1037,79 @@ export async function createWhatsAppTemplate(input: CreateTemplateInput): Promis
     };
   }
 }
+
+// ============================================================
+// DELETAR TEMPLATE NA META (DELETE /{WABA_ID}/message_templates?name=)
+// ============================================================
+// Por padrão, deleta TODAS as versões/idiomas com esse nome.
+// Para deletar versão específica de um idioma, passar hsm_id (template id).
+export async function deleteWhatsAppTemplate(name: string, hsmId?: string): Promise<{
+  success: boolean;
+  error?: string;
+  details?: any;
+}> {
+  try {
+    if (!name || !/^[a-z][a-z0-9_]{0,511}$/.test(name)) {
+      return { success: false, error: 'Nome de template inválido.' };
+    }
+
+    const rawToken = Deno.env.get('META_WHATSAPP_ACCESS_TOKEN');
+    const accessToken = rawToken?.trim().replace(/[\r\n\t]/g, '');
+    let wabaId = Deno.env.get('META_WHATSAPP_WABA_ID')?.trim();
+    const phoneNumberId = Deno.env.get('META_WHATSAPP_PHONE_NUMBER_ID')?.trim();
+
+    if (!accessToken) {
+      return { success: false, error: 'META_WHATSAPP_ACCESS_TOKEN não configurado.' };
+    }
+
+    // Fallback: descobrir WABA via Phone Number ID
+    if (!wabaId && phoneNumberId) {
+      try {
+        const phoneInfoUrl = `${META_API_BASE_URL}/${META_API_VERSION}/${phoneNumberId}?fields=whatsapp_business_account_id`;
+        const phoneResponse = await fetch(phoneInfoUrl, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (phoneResponse.ok) {
+          const phoneData = await phoneResponse.json();
+          if (phoneData.whatsapp_business_account_id) wabaId = phoneData.whatsapp_business_account_id;
+        }
+      } catch (_e) { /* segue */ }
+    }
+
+    if (!wabaId) {
+      return { success: false, error: 'WABA ID não configurado nem descoberto automaticamente.' };
+    }
+
+    const params = new URLSearchParams({ name });
+    if (hsmId) params.set('hsm_id', hsmId);
+    const url = `${META_API_BASE_URL}/${META_API_VERSION}/${wabaId}/message_templates?${params.toString()}`;
+
+    console.log(`🗑️ [deleteWhatsAppTemplate] DELETE ${url}`);
+
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+      },
+    });
+
+    const responseData = await response.json().catch(() => ({}));
+    console.log(`📦 Meta response status: ${response.status} | body:`, JSON.stringify(responseData).substring(0, 400));
+
+    if (!response.ok) {
+      const metaErr = (responseData as any)?.error;
+      const friendly = metaErr?.error_user_msg || metaErr?.message || `Erro ${response.status} da Meta`;
+      return { success: false, error: friendly, details: responseData };
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('❌ Erro ao deletar template na Meta:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Erro desconhecido',
+      details: error,
+    };
+  }
+}
