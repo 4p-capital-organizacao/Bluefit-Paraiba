@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Clock, XCircle, RefreshCw, Search, FileText, Loader2 } from 'lucide-react';
+import { CheckCircle2, Clock, XCircle, RefreshCw, Search, FileText, Loader2, Copy, Smartphone, Check } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { fetchAvailableTemplates } from '../lib/whatsapp';
@@ -14,6 +14,7 @@ import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { cn } from './ui/utils';
 import type { WhatsAppTemplate } from '../types/database';
 
@@ -55,6 +56,15 @@ export function TemplateListPanel() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [selectedTemplate, setSelectedTemplate] = useState<TemplateRow | null>(null);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  function copyToClipboard(text: string, fieldKey: string) {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedField(fieldKey);
+      setTimeout(() => setCopiedField((c) => (c === fieldKey ? null : c)), 1500);
+    });
+  }
 
   const load = useCallback(async (showToast = false) => {
     if (showToast) setRefreshing(true);
@@ -189,9 +199,11 @@ export function TemplateListPanel() {
             const buttonsComp = (t.components || []).find((c: any) => c.type === 'BUTTONS');
             const buttons = (buttonsComp?.buttons || []).filter((b: any) => b.type === 'QUICK_REPLY');
             return (
-              <div
+              <button
                 key={`${t.template_name}-${t.language}`}
-                className="bg-white rounded-xl border border-[#E5E7EB] p-4 flex flex-col gap-2"
+                type="button"
+                onClick={() => setSelectedTemplate(t)}
+                className="bg-white rounded-xl border border-[#E5E7EB] p-4 flex flex-col gap-2 text-left hover:border-[#0023D5] hover:shadow-md transition-all duration-150 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#0023D5]/30"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -237,11 +249,176 @@ export function TemplateListPanel() {
                     ))}
                   </div>
                 )}
-              </div>
+              </button>
             );
           })}
         </div>
       )}
+
+      {/* Dialog de preview do template */}
+      <Dialog open={!!selectedTemplate} onOpenChange={(o) => { if (!o) setSelectedTemplate(null); }}>
+        <DialogContent className="max-w-3xl max-h-[90vh] p-0 flex flex-col">
+          {selectedTemplate && (() => {
+            const t = selectedTemplate;
+            const status = (t.status || 'APPROVED').toUpperCase();
+            const sm = STATUS_META[status] || STATUS_META.APPROVED;
+            const SIcon = sm.icon;
+            const bodyComp = (t.components || []).find((c: any) => c.type === 'BODY');
+            const footerComp = (t.components || []).find((c: any) => c.type === 'FOOTER');
+            const headerComp = (t.components || []).find((c: any) => c.type === 'HEADER');
+            const buttonsComp = (t.components || []).find((c: any) => c.type === 'BUTTONS');
+            const buttons = (buttonsComp?.buttons || []);
+
+            return (
+              <>
+                <DialogHeader className="p-6 pb-3">
+                  <DialogTitle className="flex items-center gap-2 flex-wrap">
+                    <FileText className="w-5 h-5 text-[#0023D5]" />
+                    <span className="font-mono text-base">{t.template_name}</span>
+                    <span
+                      className={cn(
+                        'inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-semibold border whitespace-nowrap',
+                        sm.cls,
+                      )}
+                    >
+                      <SIcon className="w-3 h-3" />
+                      {sm.label}
+                    </span>
+                  </DialogTitle>
+                  <DialogDescription className="flex items-center gap-2 flex-wrap">
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        'text-[10px] uppercase font-bold',
+                        CATEGORY_CLS[t.category] || 'bg-slate-100 text-slate-600 border-slate-200',
+                      )}
+                    >
+                      {CATEGORY_LABEL[t.category] || t.category}
+                    </Badge>
+                    <span className="text-[11px] text-[#9CA3AF] uppercase font-medium">
+                      Idioma: {t.language}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => copyToClipboard(t.template_name, 'name')}
+                      className="h-7 text-xs ml-auto"
+                    >
+                      {copiedField === 'name' ? (
+                        <><Check className="w-3 h-3 mr-1" /> Nome copiado</>
+                      ) : (
+                        <><Copy className="w-3 h-3 mr-1" /> Copiar nome</>
+                      )}
+                    </Button>
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-0 flex-1 min-h-0 overflow-hidden">
+                  {/* Conteúdo bruto (texto completo) */}
+                  <div className="px-6 pb-6 overflow-y-auto space-y-4">
+                    {headerComp?.text && (
+                      <section>
+                        <p className="text-[10px] uppercase tracking-wide text-[#9CA3AF] font-semibold mb-1">Cabeçalho</p>
+                        <div className="bg-slate-50 border border-slate-200 rounded-md p-3 text-sm text-[#1B1B1B] whitespace-pre-line">
+                          {headerComp.text}
+                        </div>
+                      </section>
+                    )}
+
+                    <section>
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-[10px] uppercase tracking-wide text-[#9CA3AF] font-semibold">Mensagem (body)</p>
+                        {bodyComp?.text && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => copyToClipboard(bodyComp.text || '', 'body')}
+                            className="h-6 text-[10px]"
+                          >
+                            {copiedField === 'body' ? (
+                              <><Check className="w-3 h-3 mr-1" /> Copiado</>
+                            ) : (
+                              <><Copy className="w-3 h-3 mr-1" /> Copiar</>
+                            )}
+                          </Button>
+                        )}
+                      </div>
+                      <div className="bg-white border border-[#E5E7EB] rounded-md p-3 text-sm text-[#1B1B1B] whitespace-pre-line leading-relaxed min-h-[80px]">
+                        {bodyComp?.text || <span className="text-[#9CA3AF] italic">Sem mensagem</span>}
+                      </div>
+                    </section>
+
+                    {footerComp?.text && (
+                      <section>
+                        <p className="text-[10px] uppercase tracking-wide text-[#9CA3AF] font-semibold mb-1">Rodapé</p>
+                        <div className="bg-white border border-[#E5E7EB] rounded-md p-3 text-sm text-[#6B7280] italic">
+                          {footerComp.text}
+                        </div>
+                      </section>
+                    )}
+
+                    {buttons.length > 0 && (
+                      <section>
+                        <p className="text-[10px] uppercase tracking-wide text-[#9CA3AF] font-semibold mb-1">
+                          Botões ({buttons.length})
+                        </p>
+                        <ul className="space-y-1.5">
+                          {buttons.map((b: any, i: number) => (
+                            <li
+                              key={i}
+                              className="flex items-center gap-2 bg-white border border-[#E5E7EB] rounded-md p-2 text-sm"
+                            >
+                              <span className="text-[10px] font-bold text-slate-400 w-4">{i + 1}</span>
+                              <span className="text-[#1B1B1B] flex-1">{b.text}</span>
+                              <Badge variant="outline" className="text-[9px] uppercase">
+                                {b.type === 'QUICK_REPLY' ? 'Resposta rápida' : b.type}
+                              </Badge>
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
+                    )}
+                  </div>
+
+                  {/* Pré-visualização estilo WhatsApp */}
+                  <div className="border-l border-[#F3F3F3] bg-[#E5DDD5]/40 p-4 overflow-y-auto">
+                    <div className="flex items-center gap-2 mb-3 text-xs text-[#6B7280]">
+                      <Smartphone className="w-3.5 h-3.5" /> Pré-visualização
+                    </div>
+                    <div className="bg-white rounded-2xl rounded-tl-sm shadow-sm p-3 max-w-[260px]">
+                      {headerComp?.text && (
+                        <p className="text-[13px] font-bold text-[#1B1B1B] mb-1.5">{headerComp.text}</p>
+                      )}
+                      {bodyComp?.text ? (
+                        <p className="text-[13px] leading-snug whitespace-pre-line text-[#1B1B1B]">{bodyComp.text}</p>
+                      ) : (
+                        <p className="text-[13px] text-[#9CA3AF] italic">Sem mensagem</p>
+                      )}
+                      {footerComp?.text && (
+                        <p className="text-[11px] text-[#6B7280] mt-2 leading-tight">{footerComp.text}</p>
+                      )}
+                    </div>
+                    {buttons.length > 0 && (
+                      <div className="mt-2 space-y-1.5 max-w-[260px]">
+                        {buttons.map((b: any, i: number) => (
+                          <div
+                            key={i}
+                            className="bg-white rounded-lg shadow-sm py-2 px-3 text-center text-[13px] font-medium text-[#0079BA] border border-[#E5E7EB]"
+                          >
+                            {b.text}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
