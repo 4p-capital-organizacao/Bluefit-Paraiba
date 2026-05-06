@@ -1865,9 +1865,12 @@ app.get("/make-server-844b77a1/api/conversations", async (c) => {
     // Batch: última mensagem de cada conversa (1 query em vez de 50)
     let lastMessagesByConvId: Record<string, any> = {};
     if (convIds.length > 0) {
-      const { data: allLastMessages } = await supabaseAdmin.rpc('get_last_messages_batch', {
+      // 🔥 FIX: PostgrestFilterBuilder em supabase-js v2 não é Promise — não tem .catch().
+      //         Tratar erros via { error } do retorno em vez de .catch().
+      const rpcResult = await supabaseAdmin.rpc('get_last_messages_batch', {
         conv_ids: convIds
-      }).catch(() => ({ data: null }));
+      });
+      const allLastMessages = rpcResult?.error ? null : rpcResult.data;
 
       // Fallback: se a RPC não existir, usar query manual otimizada
       if (!allLastMessages) {

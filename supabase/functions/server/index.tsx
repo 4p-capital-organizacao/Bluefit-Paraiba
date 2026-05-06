@@ -997,6 +997,7 @@ app.post("/make-server-844b77a1/api/whatsapp/templates", authMiddleware, async (
   try {
     const userId = c.get('userId');
 
+    // Verificar cargo do usuário (>= 4 = Gerente ou Administrador)
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
       .select('id, id_cargo, cargo:cargos!profiles_id_cargo_fkey(id, level, papeis)')
@@ -1009,8 +1010,11 @@ app.post("/make-server-844b77a1/api/whatsapp/templates", authMiddleware, async (
 
     const cargoLevel = (profile.cargo as any)?.level ?? 0;
     if (cargoLevel < 4) {
-      console.warn(`⚠️ [TEMPLATES] Acesso negado userId=${userId} cargo=${cargoLevel}`);
-      return c.json({ success: false, error: 'Apenas Gerentes ou Administradores podem criar templates.' }, 403);
+      console.warn(`⚠️ [TEMPLATES] Acesso negado para userId=${userId} (cargo level=${cargoLevel})`);
+      return c.json({
+        success: false,
+        error: 'Apenas Gerentes ou Administradores podem criar templates.'
+      }, 403);
     }
 
     const body = await c.req.json().catch(() => null);
@@ -1031,10 +1035,14 @@ app.post("/make-server-844b77a1/api/whatsapp/templates", authMiddleware, async (
         : [],
     };
 
+    console.log(`📨 [TEMPLATES][POST] userId=${userId} cargoLevel=${cargoLevel} name=${input.name}`);
+
     const result = await whatsapp.createWhatsAppTemplate(input as any);
+
     if (!result.success) {
       return c.json({ success: false, error: result.error, details: result.details }, 400);
     }
+
     return c.json({ success: true, template: result.template }, 200);
   } catch (error) {
     console.error('❌ Exceção ao criar template:', error);
@@ -1857,9 +1865,12 @@ app.get("/make-server-844b77a1/api/conversations", async (c) => {
     // Batch: última mensagem de cada conversa (1 query em vez de 50)
     let lastMessagesByConvId: Record<string, any> = {};
     if (convIds.length > 0) {
-      const { data: allLastMessages } = await supabaseAdmin.rpc('get_last_messages_batch', {
+      // 🔥 FIX: PostgrestFilterBuilder em supabase-js v2 não é Promise — não tem .catch().
+      //         Tratar erros via { error } do retorno em vez de .catch().
+      const rpcResult = await supabaseAdmin.rpc('get_last_messages_batch', {
         conv_ids: convIds
-      }).catch(() => ({ data: null }));
+      });
+      const allLastMessages = rpcResult?.error ? null : rpcResult.data;
 
       // Fallback: se a RPC não existir, usar query manual otimizada
       if (!allLastMessages) {
@@ -2305,10 +2316,17 @@ app.get("/make-server-844b77a1/api/contacts", async (c) => {
         message: 'Usuário sem permissão de acesso aos contatos'
       });
     }
-    // 📌 REGRA 1: ATENDENTE - vê apenas contatos sob sua responsabilidade
+    // 📌 REGRA 1: ATENDENTE - vê todos os contatos da unidade
     else if (cargo === 'Atendente') {
-      console.log('🔒 [CONTACTS] Filtro ATENDENTE: id_profile_responsavel =', userId);
-      contactsQuery = contactsQuery.eq('id_profile_responsavel', userId);
+      if (!unidadeId) {
+        console.warn('⚠️ [CONTACTS] Atendente sem unidade definida');
+        return c.json({
+          success: false,
+          error: 'Atendente sem unidade definida'
+        }, 400);
+      }
+      console.log('🔒 [CONTACTS] Filtro ATENDENTE: unit_id =', unidadeId);
+      contactsQuery = contactsQuery.eq('unit_id', unidadeId);
     }
     // 📌 REGRA 2: SUPERVISOR/GERENTE - vê todos contatos da unidade
     else if (cargo === 'Supervisor' || cargo === 'Gerente') {
