@@ -4,6 +4,7 @@ import { useDrag, useDrop } from 'react-dnd';
 import { cn } from '../ui/utils';
 import { memo, useCallback, useMemo, useRef } from 'react';
 import { FollowupStepper } from './FollowupStepper';
+import { useAutomationSettings } from '../../hooks/useAutomationSettings';
 
 // SVG inline do ícone WhatsApp (sem dependência externa)
 function WhatsAppIcon({ className }: { className?: string }) {
@@ -152,9 +153,12 @@ interface LeadCardProps {
   lead: LeadWithDetails;
   onLeadClick: (lead: LeadWithDetails) => void;
   onWhatsAppClick?: (lead: LeadWithDetails) => void;
+  // Limite de envios automáticos da unidade (lido dinâmicamente
+  // de unit_automation_settings.max_followup_envios).
+  maxFollowupEnvios?: number;
 }
 
-function LeadCardImpl({ lead, onLeadClick, onWhatsAppClick }: LeadCardProps) {
+function LeadCardImpl({ lead, onLeadClick, onWhatsAppClick, maxFollowupEnvios = 2 }: LeadCardProps) {
   const [{ isDragging }, drag] = useDrag(() => ({
     type: ITEM_TYPE,
     item: { id: lead.id, currentStatus: lead.situacao },
@@ -173,13 +177,17 @@ function LeadCardImpl({ lead, onLeadClick, onWhatsAppClick }: LeadCardProps) {
     lead.situacao === 'contato_feito' ||
     (lead.situacao === 'base_fria' && (lead.followup_count ?? 0) > 0);
   const hasInboundFresh = lead.lastMessageDirection === 'inbound';
+  // 🔥 H2.3: cliente respondeu APÓS o follow-up automático
+  const respondedFollowup = lead.respondeu_apos_followup === true;
 
   return (
     <div
       ref={drag}
       className={cn(
-        'relative bg-white rounded-md shadow-sm border border-slate-200 overflow-hidden',
-        'hover:shadow-md hover:border-slate-300 transition-all cursor-grab active:cursor-grabbing group',
+        'relative rounded-md shadow-sm border overflow-hidden transition-all cursor-grab active:cursor-grabbing group',
+        respondedFollowup
+          ? 'bg-orange-50 border-orange-300 hover:border-orange-400 ring-1 ring-orange-200 hover:shadow-md'
+          : 'bg-white border-slate-200 hover:border-slate-300 hover:shadow-md',
         isDragging && 'opacity-40',
       )}
       onClick={() => onLeadClick(lead)}
@@ -192,6 +200,15 @@ function LeadCardImpl({ lead, onLeadClick, onWhatsAppClick }: LeadCardProps) {
         <div className="flex items-start justify-between gap-2">
           <div className="flex-1 min-w-0">
             <h4 className="font-semibold text-[13px] text-slate-900 leading-tight truncate">
+              {respondedFollowup && (
+                <span
+                  className="mr-1"
+                  title="Cliente respondeu ao follow-up automático"
+                  aria-label="Cliente respondeu ao follow-up"
+                >
+                  🔥
+                </span>
+              )}
               {lead.nome_completo}
             </h4>
             {lead.recently_reactivated && (
@@ -287,7 +304,7 @@ function LeadCardImpl({ lead, onLeadClick, onWhatsAppClick }: LeadCardProps) {
             {showFollowupStepper && (
               <FollowupStepper
                 count={lead.followup_count || 0}
-                total={2}
+                total={maxFollowupEnvios}
                 exhausted={lead.situacao === 'base_fria'}
               />
             )}
@@ -309,6 +326,7 @@ const LeadCard = memo(LeadCardImpl, (a, b) => {
   return (
     a.onLeadClick === b.onLeadClick &&
     a.onWhatsAppClick === b.onWhatsAppClick &&
+    a.maxFollowupEnvios === b.maxFollowupEnvios &&
     la.id === lb.id &&
     la.situacao === lb.situacao &&
     la.nome_completo === lb.nome_completo &&
@@ -321,7 +339,8 @@ const LeadCard = memo(LeadCardImpl, (a, b) => {
     la.created_at === lb.created_at &&
     la.lastMessageDirection === lb.lastMessageDirection &&
     la.followup_count === lb.followup_count &&
-    la.recently_reactivated === lb.recently_reactivated
+    la.recently_reactivated === lb.recently_reactivated &&
+    la.respondeu_apos_followup === lb.respondeu_apos_followup
   );
 });
 
@@ -332,9 +351,10 @@ interface KanbanColumnProps {
   onLeadClick: (lead: LeadWithDetails) => void;
   onDrop: (leadId: string, newStatus: LeadStatus) => void;
   onWhatsAppClick?: (lead: LeadWithDetails) => void;
+  getMaxFollowupForUnit: (unitId: number | null | undefined) => number;
 }
 
-function KanbanColumnImpl({ status, leads, onLeadClick, onDrop, onWhatsAppClick }: KanbanColumnProps) {
+function KanbanColumnImpl({ status, leads, onLeadClick, onDrop, onWhatsAppClick, getMaxFollowupForUnit }: KanbanColumnProps) {
   const ref = useRef<HTMLDivElement>(null);
   const config = statusConfig[status];
 
@@ -392,6 +412,7 @@ function KanbanColumnImpl({ status, leads, onLeadClick, onDrop, onWhatsAppClick 
               lead={lead}
               onLeadClick={onLeadClick}
               onWhatsAppClick={onWhatsAppClick}
+              maxFollowupEnvios={getMaxFollowupForUnit(lead.id_unidade)}
             />
           ))
         )}
@@ -404,7 +425,12 @@ function KanbanColumnImpl({ status, leads, onLeadClick, onDrop, onWhatsAppClick 
 const KanbanColumn = memo(KanbanColumnImpl);
 
 export function LeadsKanban({ leads, onLeadClick, onStatusChange, onWhatsAppClick }: LeadsKanbanProps) {
-  // 🚀 Agrupa por status uma única vez por mudança de leads (vs. 8x por render)
+  const { getMaxFollowupForUnit } = useAutomationSettings();
+
+  // 🚀 Agrupa por status uma única vez por mudança de leads (vs. 8x por render).
+  // 🔥 H2.3: dentro de cada coluna, leads que responderam ao follow-up vão pro
+  // topo (ordenados pelo timestamp da resposta, mais recente primeiro). Garante
+  // visibilidade em colunas com 400+ cards.
   const leadsByStatus = useMemo(() => {
     const map = {
       novo: [] as LeadWithDetails[],
@@ -421,6 +447,21 @@ export function LeadsKanban({ leads, onLeadClick, onStatusChange, onWhatsAppClic
       if (key && key in map) {
         (map as Record<LeadStatus, LeadWithDetails[]>)[key].push(lead);
       }
+    }
+    // Reordena cada coluna: respondeu primeiro (por ultimo_inbound desc), resto preserva ordem.
+    for (const key of Object.keys(map) as LeadStatus[]) {
+      const arr = (map as Record<LeadStatus, LeadWithDetails[]>)[key];
+      arr.sort((a, b) => {
+        const ar = a.respondeu_apos_followup ? 1 : 0;
+        const br = b.respondeu_apos_followup ? 1 : 0;
+        if (ar !== br) return br - ar;
+        if (ar === 1) {
+          const at = a.ultimo_inbound_apos_followup ? new Date(a.ultimo_inbound_apos_followup).getTime() : 0;
+          const bt = b.ultimo_inbound_apos_followup ? new Date(b.ultimo_inbound_apos_followup).getTime() : 0;
+          return bt - at;
+        }
+        return 0;
+      });
     }
     return map;
   }, [leads]);
@@ -439,6 +480,7 @@ export function LeadsKanban({ leads, onLeadClick, onStatusChange, onWhatsAppClic
           onLeadClick={onLeadClick}
           onDrop={handleDrop}
           onWhatsAppClick={onWhatsAppClick}
+          getMaxFollowupForUnit={getMaxFollowupForUnit}
         />
       ))}
       {/* Spacer to ensure last column isn't clipped by scrollbar */}
