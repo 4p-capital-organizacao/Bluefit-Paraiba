@@ -161,6 +161,44 @@ async function saveOutboundMessage(params: {
   }
 }
 
+/**
+ * Busca o texto renderizado de um template (HEADER + BODY) direto no Graph API
+ * da Meta. Usado para gravar o body real da mensagem no chat ao enviar templates
+ * automaticamente. Cai num fallback marcador se faltar credencial ou der erro.
+ */
+async function fetchTemplateRenderedText(
+  templateName: string,
+  languageCode: string,
+  fallbackLabel = '(envio automático)',
+): Promise<string> {
+  const fallback = `[${templateName}] ${fallbackLabel}`;
+  try {
+    const metaAccessToken = Deno.env.get('META_WHATSAPP_ACCESS_TOKEN') || '';
+    const wabaId = Deno.env.get('META_WHATSAPP_WABA_ID') || '';
+    if (!metaAccessToken || !wabaId) return fallback;
+
+    const tplResp = await fetch(
+      `https://graph.facebook.com/v21.0/${wabaId}/message_templates?name=${templateName}&language=${languageCode}`,
+      { method: 'GET', headers: { 'Authorization': `Bearer ${metaAccessToken}` } },
+    );
+    if (!tplResp.ok) return fallback;
+
+    const tplData = await tplResp.json();
+    const tpl = tplData.data?.[0];
+    if (!tpl) return fallback;
+
+    const headerC = tpl.components?.find((c: any) => c.type === 'HEADER');
+    const bodyC = tpl.components?.find((c: any) => c.type === 'BODY');
+    let ft = '';
+    if (headerC?.text) ft += headerC.text + '\n\n';
+    if (bodyC?.text) ft += bodyC.text;
+    return ft.trim() || fallback;
+  } catch (err) {
+    console.warn('⚠️ [TEMPLATE] Erro ao buscar texto do template:', err);
+    return fallback;
+  }
+}
+
 // ========================================
 // 🌐 CONFIGURAÇÃO DE CORS E LOGGING
 // ========================================
@@ -1180,6 +1218,15 @@ app.post("/make-server-844b77a1/api/automation/run-followup", async (c) => {
       const templateName = (u as any).template_name || 'followup_contato_feito_v1';
       const templateLanguage = (u as any).template_language || 'pt_BR';
 
+      // 🆕 Pré-busca o texto renderizado do template (HEADER+BODY) UMA vez por
+      // unidade. Vai ser usado como body da mensagem outbound em vez do antigo
+      // placeholder [template_name] (envio automático de follow-up).
+      const renderedTemplateText = await fetchTemplateRenderedText(
+        templateName,
+        templateLanguage,
+        '(envio automático de follow-up)',
+      );
+
       // 2. Conta envios de hoje
       const todayRes = await supabaseAdmin.rpc('count_followups_today', { p_unit_id: unitId });
       const sentToday = todayRes?.error ? 0 : (todayRes.data as number) || 0;
@@ -1250,13 +1297,13 @@ app.post("/make-server-844b77a1/api/automation/run-followup", async (c) => {
             status: 'sent',
           });
 
-          // Salva mensagem outbound (aparece no chat)
+          // Salva mensagem outbound (aparece no chat) com o body renderizado do template
           if (lead.conversation_id) {
             try {
               await saveOutboundMessage({
                 conversationId: String(lead.conversation_id),
                 type: 'template',
-                body: `[${templateName}] (envio automático de follow-up)`,
+                body: renderedTemplateText,
                 providerMessageId: sendResult.messageId,
                 templateName,
                 toPhoneE164: phone,
