@@ -4,6 +4,7 @@ import { useDrag, useDrop } from 'react-dnd';
 import { cn } from '../ui/utils';
 import { memo, useCallback, useMemo, useRef } from 'react';
 import { FollowupStepper } from './FollowupStepper';
+import { useAutomationSettings } from '../../hooks/useAutomationSettings';
 
 // SVG inline do ícone WhatsApp (sem dependência externa)
 function WhatsAppIcon({ className }: { className?: string }) {
@@ -152,9 +153,12 @@ interface LeadCardProps {
   lead: LeadWithDetails;
   onLeadClick: (lead: LeadWithDetails) => void;
   onWhatsAppClick?: (lead: LeadWithDetails) => void;
+  // Limite de envios automáticos da unidade (lido dinâmicamente
+  // de unit_automation_settings.max_followup_envios).
+  maxFollowupEnvios?: number;
 }
 
-function LeadCardImpl({ lead, onLeadClick, onWhatsAppClick }: LeadCardProps) {
+function LeadCardImpl({ lead, onLeadClick, onWhatsAppClick, maxFollowupEnvios = 2 }: LeadCardProps) {
   const [{ isDragging }, drag] = useDrag(() => ({
     type: ITEM_TYPE,
     item: { id: lead.id, currentStatus: lead.situacao },
@@ -300,7 +304,7 @@ function LeadCardImpl({ lead, onLeadClick, onWhatsAppClick }: LeadCardProps) {
             {showFollowupStepper && (
               <FollowupStepper
                 count={lead.followup_count || 0}
-                total={3}
+                total={maxFollowupEnvios}
                 exhausted={lead.situacao === 'base_fria'}
               />
             )}
@@ -322,6 +326,7 @@ const LeadCard = memo(LeadCardImpl, (a, b) => {
   return (
     a.onLeadClick === b.onLeadClick &&
     a.onWhatsAppClick === b.onWhatsAppClick &&
+    a.maxFollowupEnvios === b.maxFollowupEnvios &&
     la.id === lb.id &&
     la.situacao === lb.situacao &&
     la.nome_completo === lb.nome_completo &&
@@ -346,9 +351,10 @@ interface KanbanColumnProps {
   onLeadClick: (lead: LeadWithDetails) => void;
   onDrop: (leadId: string, newStatus: LeadStatus) => void;
   onWhatsAppClick?: (lead: LeadWithDetails) => void;
+  getMaxFollowupForUnit: (unitId: number | null | undefined) => number;
 }
 
-function KanbanColumnImpl({ status, leads, onLeadClick, onDrop, onWhatsAppClick }: KanbanColumnProps) {
+function KanbanColumnImpl({ status, leads, onLeadClick, onDrop, onWhatsAppClick, getMaxFollowupForUnit }: KanbanColumnProps) {
   const ref = useRef<HTMLDivElement>(null);
   const config = statusConfig[status];
 
@@ -406,6 +412,7 @@ function KanbanColumnImpl({ status, leads, onLeadClick, onDrop, onWhatsAppClick 
               lead={lead}
               onLeadClick={onLeadClick}
               onWhatsAppClick={onWhatsAppClick}
+              maxFollowupEnvios={getMaxFollowupForUnit(lead.id_unidade)}
             />
           ))
         )}
@@ -418,6 +425,8 @@ function KanbanColumnImpl({ status, leads, onLeadClick, onDrop, onWhatsAppClick 
 const KanbanColumn = memo(KanbanColumnImpl);
 
 export function LeadsKanban({ leads, onLeadClick, onStatusChange, onWhatsAppClick }: LeadsKanbanProps) {
+  const { getMaxFollowupForUnit } = useAutomationSettings();
+
   // 🚀 Agrupa por status uma única vez por mudança de leads (vs. 8x por render).
   // 🔥 H2.3: dentro de cada coluna, leads que responderam ao follow-up vão pro
   // topo (ordenados pelo timestamp da resposta, mais recente primeiro). Garante
@@ -471,6 +480,7 @@ export function LeadsKanban({ leads, onLeadClick, onStatusChange, onWhatsAppClic
           onLeadClick={onLeadClick}
           onDrop={handleDrop}
           onWhatsAppClick={onWhatsAppClick}
+          getMaxFollowupForUnit={getMaxFollowupForUnit}
         />
       ))}
       {/* Spacer to ensure last column isn't clipped by scrollbar */}
