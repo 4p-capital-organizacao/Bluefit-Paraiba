@@ -287,7 +287,7 @@ function LeadCardImpl({ lead, onLeadClick, onWhatsAppClick }: LeadCardProps) {
             {showFollowupStepper && (
               <FollowupStepper
                 count={lead.followup_count || 0}
-                total={2}
+                total={3}
                 exhausted={lead.situacao === 'base_fria'}
               />
             )}
