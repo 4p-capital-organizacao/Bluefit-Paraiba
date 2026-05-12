@@ -202,4 +202,8 @@ export interface LeadWithDetails extends Lead {
   followup_count?: number;
   // ✨ H2.2: indica se o lead foi reativado nos últimos 14 dias
   recently_reactivated?: boolean;
+  // 🔥 H2.3: cliente respondeu APÓS o último envio de follow-up automático
+  respondeu_apos_followup?: boolean;
+  // 🔥 H2.3: timestamp do último inbound após o follow-up — usado p/ ordenação
+  ultimo_inbound_apos_followup?: string | null;
 }

@@ -69,7 +69,10 @@ async function fetchFollowupSummary(leadIds: string[]) {
   if (leadIds.length === 0) return new Map<string, any>();
   const { data } = await supabase
     .from('lead_followup_summary')
-    .select('lead_id, followup_count, reactivated_at, recently_reactivated')
+    .select(
+      'lead_id, followup_count, reactivated_at, recently_reactivated, ' +
+      'respondeu_apos_followup, ultimo_inbound_apos_followup',
+    )
     .in('lead_id', leadIds);
   return new Map<string, any>((data ?? []).map((s: any) => [s.lead_id, s]));
 }
@@ -158,6 +161,8 @@ async function fetchEnrichedLeads(
             followup_count: s.followup_count,
             reactivated_at: s.reactivated_at,
             recently_reactivated: s.recently_reactivated,
+            respondeu_apos_followup: s.respondeu_apos_followup,
+            ultimo_inbound_apos_followup: s.ultimo_inbound_apos_followup,
           }
         : {}),
       ...(dir ? { lastMessageDirection: dir } : {}),
