@@ -65,36 +65,74 @@ async function fetchLeadsByProfile(
   return { rows, debugInfo };
 }
 
+// Cloudflare / Supabase derrubam URLs > ~8KB. 1000 UUIDs em uma query string
+// passa de 40KB. Quebramos em chunks de 100 (~4.5KB por request) e fazemos
+// em paralelo. Util para qualquer ".in('coluna', listaLonga)".
+const IN_CHUNK_SIZE = 100;
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  if (arr.length <= size) return [arr];
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
 async function fetchFollowupSummary(leadIds: string[]) {
   if (leadIds.length === 0) return new Map<string, any>();
-  const { data } = await supabase
-    .from('lead_followup_summary')
-    .select(
-      'lead_id, followup_count, reactivated_at, recently_reactivated, ' +
-      'respondeu_apos_followup, ultimo_inbound_apos_followup',
-    )
-    .in('lead_id', leadIds);
-  return new Map<string, any>((data ?? []).map((s: any) => [s.lead_id, s]));
+
+  const chunks = chunk(leadIds, IN_CHUNK_SIZE);
+  const results = await Promise.all(
+    chunks.map((ids) =>
+      supabase
+        .from('lead_followup_summary')
+        .select(
+          'lead_id, followup_count, reactivated_at, recently_reactivated, ' +
+          'respondeu_apos_followup, ultimo_inbound_apos_followup',
+        )
+        .in('lead_id', ids),
+    ),
+  );
+
+  const map = new Map<string, any>();
+  for (const { data } of results) {
+    for (const s of data ?? []) map.set((s as any).lead_id, s);
+  }
+  return map;
 }
 
 async function fetchLastMessageDirections(contactIds: string[]) {
   if (contactIds.length === 0) return new Map<string, 'inbound' | 'outbound'>();
 
-  const { data: conversations } = await supabase
-    .from('conversations')
-    .select('id, contact_id')
-    .in('contact_id', contactIds);
+  const contactChunks = chunk(contactIds, IN_CHUNK_SIZE);
+  const convResults = await Promise.all(
+    contactChunks.map((ids) =>
+      supabase.from('conversations').select('id, contact_id').in('contact_id', ids),
+    ),
+  );
+  const conversations: { id: number; contact_id: number }[] = [];
+  for (const { data } of convResults) {
+    if (data) conversations.push(...(data as any[]));
+  }
 
-  if (!conversations || conversations.length === 0) {
+  if (conversations.length === 0) {
     return new Map<string, 'inbound' | 'outbound'>();
   }
 
   const conversationIds = conversations.map((c) => c.id);
-  const { data: lastMessages } = await supabase
-    .from('messages')
-    .select('conversation_id, direction, sent_at')
-    .in('conversation_id', conversationIds)
-    .order('sent_at', { ascending: false });
+  const convChunks = chunk(conversationIds, IN_CHUNK_SIZE);
+  const msgResults = await Promise.all(
+    convChunks.map((ids) =>
+      supabase
+        .from('messages')
+        .select('conversation_id, direction, sent_at')
+        .in('conversation_id', ids)
+        .order('sent_at', { ascending: false }),
+    ),
+  );
+  const lastMessages: { conversation_id: number; direction: string; sent_at: string }[] = [];
+  for (const { data } of msgResults) {
+    if (data) lastMessages.push(...(data as any[]));
+  }
 
   // Última mensagem por conversa (client-side, evita N queries)
   const lastByConv: Record<string, string> = {};
