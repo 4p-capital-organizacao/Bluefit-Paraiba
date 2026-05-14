@@ -4,7 +4,6 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { supabase } from '@/app/lib/supabase';
 import { validatePassword } from '@/app/lib/passwordValidation';
 import { projectId, publicAnonKey } from '/utils/supabase/info';
 import blueDeskLogo from '../../assets/d1f7bbbdb5465392ff878250337517f331699beb.png';
@@ -33,6 +32,7 @@ export function SignupForm({ onSignupSuccess, onSwitchToLogin }: SignupFormProps
   });
   const [units, setUnits] = useState<Unit[]>([]);
   const [loadingUnits, setLoadingUnits] = useState(true);
+  const [unitsError, setUnitsError] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -63,17 +63,24 @@ export function SignupForm({ onSignupSuccess, onSwitchToLogin }: SignupFormProps
   async function loadUnits() {
     try {
       setLoadingUnits(true);
-      const { data, error } = await supabase
-        .from('units')
-        .select('id, name')
-        .order('name');
+      setUnitsError(false);
 
-      if (error) {
+      // Endpoint público — o formulário roda sem autenticação, e a RLS de
+      // `units` só libera SELECT para usuários autenticados. A query direta
+      // pelo client anon volta vazia, então buscamos pela edge function.
+      const response = await fetch(`${API_BASE}/api/units`, {
+        headers: { 'Authorization': `Bearer ${publicAnonKey}` },
+      });
+      const result = await response.json();
+
+      if (!result.success) {
+        setUnitsError(true);
         return;
       }
 
-      setUnits(data || []);
+      setUnits(result.units || []);
     } catch (err) {
+      setUnitsError(true);
     } finally {
       setLoadingUnits(false);
     }
@@ -453,7 +460,17 @@ export function SignupForm({ onSignupSuccess, onSwitchToLogin }: SignupFormProps
                     id="unidade"
                     className="pl-11 h-12 bg-[#F3F3F3] border-[#E5E7EB] text-[#1B1B1B] rounded-lg focus:border-[#0023D5] focus:ring-2 focus:ring-[#0023D5]/10 transition-all duration-150"
                   >
-                    <SelectValue placeholder={loadingUnits ? 'Carregando unidades...' : 'Selecione sua unidade'} />
+                    <SelectValue
+                      placeholder={
+                        loadingUnits
+                          ? 'Carregando unidades...'
+                          : unitsError
+                            ? 'Erro ao carregar unidades'
+                            : units.length === 0
+                              ? 'Nenhuma unidade disponível'
+                              : 'Selecione sua unidade'
+                      }
+                    />
                   </SelectTrigger>
                   <SelectContent>
                     {units.map((unit) => (
@@ -464,6 +481,27 @@ export function SignupForm({ onSignupSuccess, onSwitchToLogin }: SignupFormProps
                   </SelectContent>
                 </Select>
               </div>
+              {(unitsError || (!loadingUnits && units.length === 0)) && (
+                <div className="flex items-center justify-between gap-2 text-sm text-[#EF4444]">
+                  <span className="flex items-center gap-1.5">
+                    <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                    {unitsError
+                      ? 'Não foi possível carregar as unidades.'
+                      : 'Nenhuma unidade cadastrada.'}
+                  </span>
+                  {unitsError && (
+                    <button
+                      type="button"
+                      onClick={loadUnits}
+                      disabled={loadingUnits}
+                      className="inline-flex items-center gap-1 font-medium text-[#0023D5] hover:text-[#001AAA] transition-colors disabled:opacity-50"
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${loadingUnits ? 'animate-spin' : ''}`} />
+                      Tentar novamente
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Telefone */}
