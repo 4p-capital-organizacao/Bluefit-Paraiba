@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import { projectId, publicAnonKey } from '/utils/supabase/info';
 import { useUserProfile } from '../hooks/useUserProfile';
 import { useLeads } from '../hooks/useLeads';
+import { useUnits } from '../hooks/useUnits';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { LeadsKanban } from './crm/LeadsKanban';
 import { LeadsList } from './crm/LeadsList';
@@ -19,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from './ui/select';
-import { LayoutGrid, List, Plus, Search, Filter, ChevronLeft, ChevronRight, Building2, Shield, RefreshCw, Eye, EyeOff, Star, Loader2, AlertTriangle } from 'lucide-react';
+import { LayoutGrid, List, Plus, Search, Filter, ChevronLeft, ChevronRight, Building2, Shield, RefreshCw, Star, Loader2, AlertTriangle } from 'lucide-react';
 import { cn } from './ui/utils';
 import { toast } from 'sonner';
 
@@ -36,7 +37,8 @@ export function CRMView() {
   const [selectedLead, setSelectedLead] = useState<LeadWithDetails | null>(null);
   const [leadToDelete, setLeadToDelete] = useState<LeadWithDetails | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const [showAllUnits, setShowAllUnits] = useState(false);
+  // Filtro de unidade: 'all' | 'mine' | '<id da unidade>'
+  const [unitFilter, setUnitFilter] = useState<string>('mine');
   const [paginatedLeads, setPaginatedLeads] = useState<LeadWithDetails[]>([]);
   const ITEMS_PER_PAGE = 50;
 
@@ -49,6 +51,16 @@ export function CRMView() {
   // Hook de perfil do usuário
   const { profile: userProfile, loading: profileLoading, error: profileError } = useUserProfile();
 
+  // Lista de unidades para o dropdown (admin total = todas; demais = só as suas)
+  const { units: allUnits } = useUnits();
+  const unitOptions = useMemo(() => {
+    if (userProfile.isFullAdmin) return allUnits;
+    return userProfile.unitIds.map((id) => ({
+      id,
+      name: userProfile.unitNames[id] || `Unidade ${id}`,
+    }));
+  }, [userProfile.isFullAdmin, userProfile.unitIds, userProfile.unitNames, allUnits]);
+
   // 🚀 Cache via React Query — substitui loadLeads/setLeads/setLoading
   const {
     leads,
@@ -58,7 +70,7 @@ export function CRMView() {
     isFetching,
     refetch: refetchLeads,
     updateLead,
-  } = useLeads({ profile: userProfile, showAllUnits });
+  } = useLeads({ profile: userProfile, unitFilter });
 
   // Auto-corrige situacao inválida no banco (fire-and-forget) quando detectado
   useEffect(() => {
@@ -382,7 +394,7 @@ export function CRMView() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [debouncedSearchTerm, statusFilter, scoreFilter]);
+  }, [debouncedSearchTerm, statusFilter, scoreFilter, unitFilter]);
 
   const totalPages = Math.ceil(filteredLeads.length / ITEMS_PER_PAGE);
   const startItem = (currentPage - 1) * ITEMS_PER_PAGE + 1;
@@ -505,7 +517,7 @@ export function CRMView() {
       );
     }
 
-    const { isAdmin, unitName, id_unidade, id_cargo, nome, sobrenome } = userProfile;
+    const { isAdmin, unitName, id_cargo, nome, sobrenome } = userProfile;
     const isFullAdmin = userProfile.isFullAdmin;
     const multiUnit = userProfile.unitIds.length > 1;
     const allUnitNamesStr = Object.values(userProfile.unitNames).join(', ');
@@ -552,35 +564,32 @@ export function CRMView() {
           )}
         </div>
 
-        {isFullAdmin && (
+        {(isFullAdmin || multiUnit) && (
           <>
             <div className="w-px h-4 bg-slate-300" />
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowAllUnits(prev => !prev)}
-              className={cn(
-                "h-7 px-2.5 gap-1.5 text-xs font-medium",
-                showAllUnits
-                  ? "bg-amber-200/60 text-amber-800 hover:bg-amber-200"
-                  : "bg-white/60 text-slate-600 hover:bg-white"
-              )}
-            >
-              {showAllUnits ? (
-                <>
-                  <Eye className="w-3.5 h-3.5" />
-                  Todas as unidades
-                </>
-              ) : (
-                <>
-                  <EyeOff className="w-3.5 h-3.5" />
+            <Select value={unitFilter} onValueChange={setUnitFilter}>
+              <SelectTrigger className="h-7 w-[190px] text-xs bg-white/70 border-slate-200">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Building2 className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                  <SelectValue />
+                </div>
+              </SelectTrigger>
+              <SelectContent>
+                {isFullAdmin && (
+                  <SelectItem value="all">Todas as unidades</SelectItem>
+                )}
+                <SelectItem value="mine">
                   {multiUnit
                     ? `Minhas unidades (${userProfile.unitIds.length})`
-                    : `Minha unidade (${unitName || `ID ${id_unidade}`})`
-                  }
-                </>
-              )}
-            </Button>
+                    : `Minha unidade${unitName ? ` (${unitName})` : ''}`}
+                </SelectItem>
+                {unitOptions.map((unit) => (
+                  <SelectItem key={unit.id} value={String(unit.id)}>
+                    {unit.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </>
         )}
 
@@ -748,10 +757,25 @@ export function CRMView() {
               {filteredLeads.filter(l => l.situacao?.toLowerCase() === 'matriculado').length}
             </span>
           </div>
+          <div className="flex items-center gap-1 bg-slate-100 border border-slate-300 rounded-md px-2 py-0.5 flex-shrink-0">
+            <span className="text-[10px] text-slate-500 font-medium">Base fria</span>
+            <span className="text-xs font-bold text-slate-700">
+              {filteredLeads.filter(l => l.situacao?.toLowerCase() === 'base_fria').length}
+            </span>
+          </div>
           <div className="flex items-center gap-1 bg-red-50 border border-red-200 rounded-md px-2 py-0.5 flex-shrink-0">
             <span className="text-[10px] text-red-600 font-medium">Perdido</span>
             <span className="text-xs font-bold text-red-700">
               {filteredLeads.filter(l => l.situacao?.toLowerCase() === 'perdido').length}
+            </span>
+          </div>
+
+          {/* Separador + Total geral (soma de todos os status) */}
+          <div className="w-px h-4 bg-slate-300 flex-shrink-0" />
+          <div className="flex items-center gap-1 bg-[#0028e6] rounded-md px-2 py-0.5 flex-shrink-0">
+            <span className="text-[10px] text-blue-100 font-medium">Total</span>
+            <span className="text-xs font-bold text-white">
+              {filteredLeads.length}
             </span>
           </div>
         </div>

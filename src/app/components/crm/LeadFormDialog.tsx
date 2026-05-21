@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
-import { Lead, LeadStatus, Unit } from '../../types/database';
+import { useState } from 'react';
+import { Lead, LeadStatus } from '../../types/database';
 import { supabase } from '../../lib/supabase';
 import { UserProfile } from '../../hooks/useUserProfile';
+import { useUnits } from '../../hooks/useUnits';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -32,19 +33,61 @@ const statusOptions: { value: LeadStatus; label: string }[] = [
   { value: 'perdido', label: 'Perdido' },
 ];
 
-export function LeadFormDialog({ open, onOpenChange, lead, onSuccess, userProfile }: LeadFormDialogProps) {
-  const [loading, setLoading] = useState(false);
-  const [units, setUnits] = useState<Unit[]>([]);
-  
-  const [formData, setFormData] = useState({
+interface LeadFormState {
+  nome_completo: string;
+  telefone: string;
+  email: string;
+  situacao: LeadStatus;
+  origem: string;
+  campanha: string;
+  midia: string;
+  pontuacao: number | null;
+  classificacao: string;
+  responsavel: string;
+  ja_treina: string;
+  objetivo_principal: string;
+  mora_ou_trabalha_perto: string;
+  quando_quer_comecar: string;
+  motivo_cancelamento: string;
+  id_unidade: number | null;
+}
+
+/**
+ * Monta o estado inicial do formulário a partir do lead (edição) ou
+ * vazio + unidade do usuário logado (novo lead). Usado como inicializador
+ * do useState — assim o formulário já nasce preenchido, sem depender de
+ * um useEffect pós-montagem que corria com a abertura do diálogo.
+ */
+function buildInitialFormData(lead?: Lead | null, userProfile?: UserProfile): LeadFormState {
+  if (lead) {
+    return {
+      nome_completo: lead.nome_completo || '',
+      telefone: lead.telefone || '',
+      email: lead.email || '',
+      situacao: lead.situacao || 'novo',
+      origem: lead.origem || '',
+      campanha: lead.campanha || '',
+      midia: lead.midia || '',
+      pontuacao: lead.pontuacao ?? null,
+      classificacao: lead.classificacao || '',
+      responsavel: lead.responsavel || '',
+      ja_treina: lead.ja_treina || '',
+      objetivo_principal: lead.objetivo_principal || '',
+      mora_ou_trabalha_perto: lead.mora_ou_trabalha_perto || '',
+      quando_quer_comecar: lead.quando_quer_comecar || '',
+      motivo_cancelamento: lead.motivo_cancelamento || '',
+      id_unidade: lead.id_unidade ?? null,
+    };
+  }
+  return {
     nome_completo: '',
     telefone: '',
     email: '',
-    situacao: 'novo' as LeadStatus,
+    situacao: 'novo',
     origem: '',
     campanha: '',
     midia: '',
-    pontuacao: null as number | null,
+    pontuacao: null,
     classificacao: '',
     responsavel: '',
     ja_treina: '',
@@ -52,69 +95,46 @@ export function LeadFormDialog({ open, onOpenChange, lead, onSuccess, userProfil
     mora_ou_trabalha_perto: '',
     quando_quer_comecar: '',
     motivo_cancelamento: '',
-    id_unidade: null as number | null,
-  });
+    id_unidade: userProfile?.id_unidade ?? null,
+  };
+}
 
-  useEffect(() => {
-    if (open) {
-      loadUnits();
-      
-      if (lead) {
-        // Editando lead existente
-        setFormData({
-          nome_completo: lead.nome_completo || '',
-          telefone: lead.telefone || '',
-          email: lead.email || '',
-          situacao: lead.situacao || 'novo',
-          origem: lead.origem || '',
-          campanha: lead.campanha || '',
-          midia: lead.midia || '',
-          pontuacao: lead.pontuacao ?? null,
-          classificacao: lead.classificacao || '',
-          responsavel: lead.responsavel || '',
-          ja_treina: lead.ja_treina || '',
-          objetivo_principal: lead.objetivo_principal || '',
-          mora_ou_trabalha_perto: lead.mora_ou_trabalha_perto || '',
-          quando_quer_comecar: lead.quando_quer_comecar || '',
-          motivo_cancelamento: lead.motivo_cancelamento || '',
-          id_unidade: lead.id_unidade ?? null,
-        });
-      } else {
-        // Novo lead: auto-atribuir unidade do usuário logado
-        setFormData({
-          nome_completo: '',
-          telefone: '',
-          email: '',
-          situacao: 'novo',
-          origem: '',
-          campanha: '',
-          midia: '',
-          pontuacao: null,
-          classificacao: '',
-          responsavel: '',
-          ja_treina: '',
-          objetivo_principal: '',
-          mora_ou_trabalha_perto: '',
-          quando_quer_comecar: '',
-          motivo_cancelamento: '',
-          id_unidade: userProfile?.id_unidade ?? null,
-        });
-      }
-    }
-  }, [open, lead, userProfile]);
+/**
+ * Shell do diálogo. O formulário em si fica em <LeadFormBody>, que é
+ * filho de <DialogContent> — o Radix monta/desmonta esse conteúdo a cada
+ * abertura, então o estado do formulário sempre nasce do lead atual.
+ */
+export function LeadFormDialog({ open, onOpenChange, lead, onSuccess, userProfile }: LeadFormDialogProps) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <LeadFormBody
+          key={lead?.id ?? 'new'}
+          lead={lead}
+          userProfile={userProfile}
+          onSuccess={onSuccess}
+          onClose={() => onOpenChange(false)}
+        />
+      </DialogContent>
+    </Dialog>
+  );
+}
 
-  async function loadUnits() {
-    try {
-      const { data } = await supabase
-        .from('units')
-        .select('*')
-        .order('name');
-      
-      if (data) setUnits(data);
-    } catch (error) {
-      console.error('Erro ao carregar unidades:', error);
-    }
-  }
+interface LeadFormBodyProps {
+  lead?: Lead | null;
+  userProfile?: UserProfile;
+  onSuccess: () => void;
+  onClose: () => void;
+}
+
+function LeadFormBody({ lead, userProfile, onSuccess, onClose }: LeadFormBodyProps) {
+  const [loading, setLoading] = useState(false);
+  const { units } = useUnits();
+
+  // Estado já nasce preenchido com o lead (ou vazio p/ novo lead).
+  const [formData, setFormData] = useState<LeadFormState>(() =>
+    buildInitialFormData(lead, userProfile),
+  );
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -184,7 +204,7 @@ export function LeadFormDialog({ open, onOpenChange, lead, onSuccess, userProfil
       }
 
       onSuccess();
-      onOpenChange(false);
+      onClose();
     } catch (error) {
       console.error('Erro ao salvar lead:', error);
       toast.error('Erro ao salvar lead. Tente novamente.');
@@ -202,309 +222,307 @@ export function LeadFormDialog({ open, onOpenChange, lead, onSuccess, userProfil
   const canPickFromOwnUnits = isMultiUnit && !canChangeUnit;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="text-2xl font-bold text-slate-900">
-            {lead ? 'Editar Lead' : 'Novo Lead'}
-          </DialogTitle>
-          <DialogDescription className="text-sm text-slate-500">
-            {lead ? 'Atualize as informações do lead' : 'Preencha os campos para criar um novo lead'}
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <DialogHeader>
+        <DialogTitle className="text-2xl font-bold text-slate-900">
+          {lead ? 'Editar Lead' : 'Novo Lead'}
+        </DialogTitle>
+        <DialogDescription className="text-sm text-slate-500">
+          {lead ? 'Atualize as informações do lead' : 'Preencha os campos para criar um novo lead'}
+        </DialogDescription>
+      </DialogHeader>
 
-        <Tabs defaultValue="informacoes">
-          <TabsList className={cn("grid", lead ? "grid-cols-2" : "grid-cols-1")}>
-            <TabsTrigger value="informacoes">Informações</TabsTrigger>
-            {lead && (
-              <TabsTrigger value="historico">
-                <History className="mr-2 h-4 w-4" />
-                Histórico
-              </TabsTrigger>
-            )}
-          </TabsList>
+      <Tabs defaultValue="informacoes">
+        <TabsList className={cn("grid", lead ? "grid-cols-2" : "grid-cols-1")}>
+          <TabsTrigger value="informacoes">Informações</TabsTrigger>
+          {lead && (
+            <TabsTrigger value="historico">
+              <History className="mr-2 h-4 w-4" />
+              Histórico
+            </TabsTrigger>
+          )}
+        </TabsList>
 
-          <TabsContent value="informacoes">
-            <form onSubmit={handleSubmit} className="space-y-6">
-              {/* Informações Básicas */}
-              <div className="space-y-4">
-                <h3 className="font-semibold text-slate-900">Informações Básicas</h3>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="nome_completo">Nome *</Label>
-                    <Input
-                      id="nome_completo"
-                      value={formData.nome_completo}
-                      onChange={(e) => setFormData({ ...formData, nome_completo: e.target.value })}
-                      placeholder="Nome completo"
-                      required
-                    />
-                  </div>
+        <TabsContent value="informacoes">
+          <form onSubmit={handleSubmit} className="space-y-6">
+            {/* Informações Básicas */}
+            <div className="space-y-4">
+              <h3 className="font-semibold text-slate-900">Informações Básicas</h3>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="telefone">Telefone *</Label>
-                    <Input
-                      id="telefone"
-                      value={formData.telefone}
-                      onChange={(e) => setFormData({ ...formData, telefone: e.target.value })}
-                      placeholder="(00) 00000-0000"
-                      required
-                    />
-                  </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="nome_completo">Nome *</Label>
+                  <Input
+                    id="nome_completo"
+                    value={formData.nome_completo}
+                    onChange={(e) => setFormData({ ...formData, nome_completo: e.target.value })}
+                    placeholder="Nome completo"
+                    required
+                  />
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="email">Email</Label>
+                  <Label htmlFor="telefone">Telefone *</Label>
                   <Input
-                    id="email"
-                    type="email"
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    placeholder="email@exemplo.com"
+                    id="telefone"
+                    value={formData.telefone}
+                    onChange={(e) => setFormData({ ...formData, telefone: e.target.value })}
+                    placeholder="(00) 00000-0000"
+                    required
                   />
                 </div>
               </div>
 
-              {/* Status e Responsável */}
-              <div className="space-y-4">
-                <h3 className="font-semibold text-slate-900">Status e Atribuição</h3>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="situacao">Status</Label>
-                    <Select
-                      value={formData.situacao}
-                      onValueChange={(value: LeadStatus) => setFormData({ ...formData, situacao: value })}
-                    >
-                      <SelectTrigger id="situacao">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {statusOptions.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  placeholder="email@exemplo.com"
+                />
+              </div>
+            </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="responsavel">Responsável</Label>
-                    <Input
-                      id="responsavel"
-                      value={formData.responsavel}
-                      onChange={(e) => setFormData({ ...formData, responsavel: e.target.value })}
-                      placeholder="Nome do responsável"
-                    />
-                  </div>
-                </div>
+            {/* Status e Responsável */}
+            <div className="space-y-4">
+              <h3 className="font-semibold text-slate-900">Status e Atribuição</h3>
 
-                {/* Unidade */}
+              <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="id_unidade" className="flex items-center gap-2">
-                    <Building2 className="w-4 h-4 text-slate-500" />
-                    Unidade
-                    {!canChangeUnit && !canPickFromOwnUnits && formData.id_unidade && (
-                      <span className="text-xs text-slate-400 font-normal flex items-center gap-1">
-                        <Info className="w-3 h-3" />
-                        Atribuída automaticamente
-                      </span>
-                    )}
-                  </Label>
-                  {canChangeUnit ? (
-                    <Select
-                      value={formData.id_unidade ? formData.id_unidade.toString() : "none"}
-                      onValueChange={(value) => setFormData({ ...formData, id_unidade: value === "none" ? null : parseInt(value) })}
-                    >
-                      <SelectTrigger id="id_unidade">
-                        <SelectValue placeholder="Selecionar unidade" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">Nenhuma</SelectItem>
-                        {units.map((unit) => (
-                          <SelectItem key={unit.id} value={unit.id.toString()}>
-                            {unit.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : canPickFromOwnUnits ? (
-                    <Select
-                      value={formData.id_unidade ? formData.id_unidade.toString() : "none"}
-                      onValueChange={(value) => setFormData({ ...formData, id_unidade: value === "none" ? null : parseInt(value) })}
-                    >
-                      <SelectTrigger id="id_unidade">
-                        <SelectValue placeholder="Selecionar unidade" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {(userProfile?.unitIds ?? []).map((uid) => {
-                          const unitName = userProfile?.unitNames?.[uid] || `Unidade ${uid}`;
-                          return (
-                            <SelectItem key={uid} value={uid.toString()}>
-                              {unitName}
-                              {uid === userProfile?.id_unidade ? ' (principal)' : ''}
-                            </SelectItem>
-                          );
-                        })}
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <div className="flex items-center gap-2 h-10 px-3 border border-slate-200 rounded-md bg-slate-50">
-                      <Building2 className="w-4 h-4 text-[#0028e6]" />
-                      <span className="text-sm text-slate-700">
-                        {userProfile?.unitName || (formData.id_unidade ? `Unidade ${formData.id_unidade}` : 'Sem unidade')}
-                      </span>
-                    </div>
-                  )}
+                  <Label htmlFor="situacao">Status</Label>
+                  <Select
+                    value={formData.situacao}
+                    onValueChange={(value: LeadStatus) => setFormData({ ...formData, situacao: value })}
+                  >
+                    <SelectTrigger id="situacao">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {statusOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
 
-                {/* Motivo cancelamento (visível apenas para status cancelado/perdido) */}
-                {(formData.situacao === 'visita_cancelada' || formData.situacao === 'perdido') && (
-                  <div className="space-y-2">
-                    <Label htmlFor="motivo_cancelamento">Motivo do Cancelamento</Label>
-                    <Input
-                      id="motivo_cancelamento"
-                      value={formData.motivo_cancelamento}
-                      onChange={(e) => setFormData({ ...formData, motivo_cancelamento: e.target.value })}
-                      placeholder="Descreva o motivo..."
-                    />
+                <div className="space-y-2">
+                  <Label htmlFor="responsavel">Responsável</Label>
+                  <Input
+                    id="responsavel"
+                    value={formData.responsavel}
+                    onChange={(e) => setFormData({ ...formData, responsavel: e.target.value })}
+                    placeholder="Nome do responsável"
+                  />
+                </div>
+              </div>
+
+              {/* Unidade */}
+              <div className="space-y-2">
+                <Label htmlFor="id_unidade" className="flex items-center gap-2">
+                  <Building2 className="w-4 h-4 text-slate-500" />
+                  Unidade
+                  {!canChangeUnit && !canPickFromOwnUnits && formData.id_unidade && (
+                    <span className="text-xs text-slate-400 font-normal flex items-center gap-1">
+                      <Info className="w-3 h-3" />
+                      Atribuída automaticamente
+                    </span>
+                  )}
+                </Label>
+                {canChangeUnit ? (
+                  <Select
+                    value={formData.id_unidade ? formData.id_unidade.toString() : "none"}
+                    onValueChange={(value) => setFormData({ ...formData, id_unidade: value === "none" ? null : parseInt(value) })}
+                  >
+                    <SelectTrigger id="id_unidade">
+                      <SelectValue placeholder="Selecionar unidade" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Nenhuma</SelectItem>
+                      {units.map((unit) => (
+                        <SelectItem key={unit.id} value={unit.id.toString()}>
+                          {unit.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : canPickFromOwnUnits ? (
+                  <Select
+                    value={formData.id_unidade ? formData.id_unidade.toString() : "none"}
+                    onValueChange={(value) => setFormData({ ...formData, id_unidade: value === "none" ? null : parseInt(value) })}
+                  >
+                    <SelectTrigger id="id_unidade">
+                      <SelectValue placeholder="Selecionar unidade" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(userProfile?.unitIds ?? []).map((uid) => {
+                        const unitName = userProfile?.unitNames?.[uid] || `Unidade ${uid}`;
+                        return (
+                          <SelectItem key={uid} value={uid.toString()}>
+                            {unitName}
+                            {uid === userProfile?.id_unidade ? ' (principal)' : ''}
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <div className="flex items-center gap-2 h-10 px-3 border border-slate-200 rounded-md bg-slate-50">
+                    <Building2 className="w-4 h-4 text-[#0028e6]" />
+                    <span className="text-sm text-slate-700">
+                      {userProfile?.unitName || (formData.id_unidade ? `Unidade ${formData.id_unidade}` : 'Sem unidade')}
+                    </span>
                   </div>
                 )}
               </div>
 
-              {/* Detalhes do Lead */}
-              <div className="space-y-4">
-                <h3 className="font-semibold text-slate-900">Detalhes</h3>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="origem">Origem</Label>
-                    <Input
-                      id="origem"
-                      value={formData.origem}
-                      onChange={(e) => setFormData({ ...formData, origem: e.target.value })}
-                      placeholder="Ex: Instagram, Indicação, Google"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="campanha">Campanha</Label>
-                    <Input
-                      id="campanha"
-                      value={formData.campanha}
-                      onChange={(e) => setFormData({ ...formData, campanha: e.target.value })}
-                      placeholder="Nome da campanha"
-                    />
-                  </div>
+              {/* Motivo cancelamento (visível apenas para status cancelado/perdido) */}
+              {(formData.situacao === 'visita_cancelada' || formData.situacao === 'perdido') && (
+                <div className="space-y-2">
+                  <Label htmlFor="motivo_cancelamento">Motivo do Cancelamento</Label>
+                  <Input
+                    id="motivo_cancelamento"
+                    value={formData.motivo_cancelamento}
+                    onChange={(e) => setFormData({ ...formData, motivo_cancelamento: e.target.value })}
+                    placeholder="Descreva o motivo..."
+                  />
                 </div>
+              )}
+            </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="midia">Mídia</Label>
-                    <Input
-                      id="midia"
-                      value={formData.midia}
-                      onChange={(e) => setFormData({ ...formData, midia: e.target.value })}
-                      placeholder="Ex: Facebook Ads, Google Ads"
-                    />
-                  </div>
+            {/* Detalhes do Lead */}
+            <div className="space-y-4">
+              <h3 className="font-semibold text-slate-900">Detalhes</h3>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="objetivo_principal">Objetivo Principal</Label>
-                    <Input
-                      id="objetivo_principal"
-                      value={formData.objetivo_principal}
-                      onChange={(e) => setFormData({ ...formData, objetivo_principal: e.target.value })}
-                      placeholder="Ex: Emagrecimento, Hipertrofia"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="pontuacao">Pontuação</Label>
-                    <Input
-                      id="pontuacao"
-                      type="number"
-                      min="0"
-                      max="100"
-                      value={formData.pontuacao ?? ''}
-                      onChange={(e) => setFormData({ ...formData, pontuacao: e.target.value ? parseInt(e.target.value) : null })}
-                      placeholder="0 a 100"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="classificacao">Classificação</Label>
-                    <Input
-                      id="classificacao"
-                      value={formData.classificacao}
-                      onChange={(e) => setFormData({ ...formData, classificacao: e.target.value })}
-                      placeholder="Ex: Quente, Frio, Morno"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="ja_treina">Já treina?</Label>
-                    <Input
-                      id="ja_treina"
-                      value={formData.ja_treina}
-                      onChange={(e) => setFormData({ ...formData, ja_treina: e.target.value })}
-                      placeholder="Ex: Sim, Não, Em casa"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="quando_quer_comecar">Quando quer começar?</Label>
-                    <Input
-                      id="quando_quer_comecar"
-                      value={formData.quando_quer_comecar}
-                      onChange={(e) => setFormData({ ...formData, quando_quer_comecar: e.target.value })}
-                      placeholder="Ex: Imediato, Próximo mês"
-                    />
-                  </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="origem">Origem</Label>
+                  <Input
+                    id="origem"
+                    value={formData.origem}
+                    onChange={(e) => setFormData({ ...formData, origem: e.target.value })}
+                    placeholder="Ex: Instagram, Indicação, Google"
+                  />
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="mora_ou_trabalha_perto">Mora ou trabalha perto?</Label>
+                  <Label htmlFor="campanha">Campanha</Label>
                   <Input
-                    id="mora_ou_trabalha_perto"
-                    value={formData.mora_ou_trabalha_perto}
-                    onChange={(e) => setFormData({ ...formData, mora_ou_trabalha_perto: e.target.value })}
-                    placeholder="Ex: Sim, mora a 5 min"
+                    id="campanha"
+                    value={formData.campanha}
+                    onChange={(e) => setFormData({ ...formData, campanha: e.target.value })}
+                    placeholder="Nome da campanha"
                   />
                 </div>
               </div>
 
-              <DialogFooter>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => onOpenChange(false)}
-                  disabled={loading}
-                >
-                  Cancelar
-                </Button>
-                <Button
-                  type="submit"
-                  disabled={loading}
-                  className="bg-[#0028e6] hover:bg-[#0020b8]"
-                >
-                  {loading ? 'Salvando...' : lead ? 'Salvar' : 'Criar Lead'}
-                </Button>
-              </DialogFooter>
-            </form>
-          </TabsContent>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="midia">Mídia</Label>
+                  <Input
+                    id="midia"
+                    value={formData.midia}
+                    onChange={(e) => setFormData({ ...formData, midia: e.target.value })}
+                    placeholder="Ex: Facebook Ads, Google Ads"
+                  />
+                </div>
 
-          <TabsContent value="historico">
-            {lead?.id && <LeadHistory leadId={lead.id} />}
-          </TabsContent>
-        </Tabs>
-      </DialogContent>
-    </Dialog>
+                <div className="space-y-2">
+                  <Label htmlFor="objetivo_principal">Objetivo Principal</Label>
+                  <Input
+                    id="objetivo_principal"
+                    value={formData.objetivo_principal}
+                    onChange={(e) => setFormData({ ...formData, objetivo_principal: e.target.value })}
+                    placeholder="Ex: Emagrecimento, Hipertrofia"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="pontuacao">Pontuação</Label>
+                  <Input
+                    id="pontuacao"
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={formData.pontuacao ?? ''}
+                    onChange={(e) => setFormData({ ...formData, pontuacao: e.target.value ? parseInt(e.target.value) : null })}
+                    placeholder="0 a 100"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="classificacao">Classificação</Label>
+                  <Input
+                    id="classificacao"
+                    value={formData.classificacao}
+                    onChange={(e) => setFormData({ ...formData, classificacao: e.target.value })}
+                    placeholder="Ex: Quente, Frio, Morno"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="ja_treina">Já treina?</Label>
+                  <Input
+                    id="ja_treina"
+                    value={formData.ja_treina}
+                    onChange={(e) => setFormData({ ...formData, ja_treina: e.target.value })}
+                    placeholder="Ex: Sim, Não, Em casa"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="quando_quer_comecar">Quando quer começar?</Label>
+                  <Input
+                    id="quando_quer_comecar"
+                    value={formData.quando_quer_comecar}
+                    onChange={(e) => setFormData({ ...formData, quando_quer_comecar: e.target.value })}
+                    placeholder="Ex: Imediato, Próximo mês"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="mora_ou_trabalha_perto">Mora ou trabalha perto?</Label>
+                <Input
+                  id="mora_ou_trabalha_perto"
+                  value={formData.mora_ou_trabalha_perto}
+                  onChange={(e) => setFormData({ ...formData, mora_ou_trabalha_perto: e.target.value })}
+                  placeholder="Ex: Sim, mora a 5 min"
+                />
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onClose}
+                disabled={loading}
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                disabled={loading}
+                className="bg-[#0028e6] hover:bg-[#0020b8]"
+              >
+                {loading ? 'Salvando...' : lead ? 'Salvar' : 'Criar Lead'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </TabsContent>
+
+        <TabsContent value="historico">
+          {lead?.id && <LeadHistory leadId={lead.id} />}
+        </TabsContent>
+      </Tabs>
+    </>
   );
 }

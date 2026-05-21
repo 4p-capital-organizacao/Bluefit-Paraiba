@@ -469,17 +469,15 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
             addNotification(notif);
 
+            // Toast só quando a conversa é atribuída a MIM. Atribuições de
+            // outros atendentes ficam apenas no sino — o toast aparecia o
+            // tempo todo e cobria os filtros do CRM.
             if (isForMe) {
               toast.success('Conversa atribuída a você!', {
                 description: `${contactName} foi atribuída a você`,
                 duration: 6000,
               });
               showBrowserNotification('Conversa atribuída a você', `${contactName} foi atribuída a você`);
-            } else {
-              toast.info(title, {
-                description: message,
-                duration: 4000,
-              });
             }
           }
         }

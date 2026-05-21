@@ -23,44 +23,122 @@ const VALID_STATUSES: LeadStatus[] = [
 ];
 
 /**
+ * Filtro de unidade selecionado na UI do CRM.
+ * - `'all'`  → todas as unidades (só admin total; outros caem em `'mine'`)
+ * - `'mine'` → unidade(s) do próprio usuário + leads sem unidade
+ * - `<id>`   → uma unidade específica (validada contra o acesso do usuário)
+ */
+export type UnitFilter = 'all' | 'mine' | string;
+
+/**
+ * Resolve o filtro pedido para o filtro efetivamente aplicável,
+ * respeitando o cargo/unidades do usuário.
+ */
+function resolveUnitFilter(
+  profile: UserProfile,
+  unitFilter: UnitFilter,
+): 'all' | 'mine' | number {
+  const { unitIds, isFullAdmin } = profile;
+
+  if (unitFilter === 'all') {
+    return isFullAdmin ? 'all' : 'mine';
+  }
+  if (unitFilter === 'mine') {
+    return 'mine';
+  }
+
+  const unitId = Number(unitFilter);
+  if (!Number.isFinite(unitId)) return 'mine';
+
+  // Admin total pode qualquer unidade; demais só as suas.
+  const hasAccess = isFullAdmin || unitIds.includes(unitId);
+  return hasAccess ? unitId : 'mine';
+}
+
+// A API REST do Supabase corta cada request em no máximo 1000 linhas.
+// Como a base já passa de 2k leads, paginamos com .range() pra trazer TODOS
+// — senão o filtro "todas as unidades" some com leads silenciosamente.
+const LEADS_PAGE_SIZE = 1000;
+
+/**
+ * Aplica o filtro de unidade (RBAC) a um query builder de `leads`.
+ * `effective` já vem resolvido por resolveUnitFilter.
+ */
+function applyUnitFilter(query: any, effective: 'all' | 'mine' | number, profile: UserProfile) {
+  const { id_unidade, unitIds } = profile;
+
+  if (effective === 'all') return query;
+  if (typeof effective === 'number') return query.eq('id_unidade', effective);
+
+  // 'mine'
+  if (unitIds.length > 0) {
+    const unitFilters = unitIds.map((id) => `id_unidade.eq.${id}`).join(',');
+    return query.or(`${unitFilters},id_unidade.is.null`);
+  }
+  if (id_unidade != null) {
+    return query.or(`id_unidade.eq.${id_unidade},id_unidade.is.null`);
+  }
+  return query.is('id_unidade', null);
+}
+
+/**
  * Faz o fetch principal dos leads aplicando o filtro de RBAC
  * por unidade/cargo (mesmo cálculo que estava em CRMView.loadLeads).
+ *
+ * Pagina com .range() — a 1ª página vem com count exato, as demais
+ * disparam em paralelo. Ordena por (created_at, id) pra paginação estável.
  */
 async function fetchLeadsByProfile(
   profile: UserProfile,
-  showAllUnits: boolean,
+  unitFilter: UnitFilter,
 ): Promise<{ rows: any[]; debugInfo: string }> {
-  const { id_unidade, unitIds, unitName, unitNames, isFullAdmin } = profile;
+  const { id_unidade, unitIds, unitName, unitNames } = profile;
+  const effective = resolveUnitFilter(profile, unitFilter);
 
-  let query = supabase
-    .from('leads')
-    .select('*')
-    .order('created_at', { ascending: false });
+  const buildQuery = (withCount: boolean) => {
+    const select = withCount
+      ? supabase.from('leads').select('*', { count: 'exact' })
+      : supabase.from('leads').select('*');
+    return applyUnitFilter(select, effective, profile)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false });
+  };
 
-  const shouldFilterByUnit = !isFullAdmin || (isFullAdmin && !showAllUnits);
+  // 1ª página + count exato do total que casa com o filtro
+  const { data: firstData, error: firstError, count } = await buildQuery(true)
+    .range(0, LEADS_PAGE_SIZE - 1);
+  if (firstError) throw firstError;
 
-  if (shouldFilterByUnit && unitIds.length > 0) {
-    const unitFilters = unitIds.map((id) => `id_unidade.eq.${id}`).join(',');
-    query = query.or(`${unitFilters},id_unidade.is.null`);
-  } else if (shouldFilterByUnit && id_unidade != null) {
-    query = query.or(`id_unidade.eq.${id_unidade},id_unidade.is.null`);
-  } else if (!isFullAdmin && unitIds.length === 0 && id_unidade == null) {
-    query = query.is('id_unidade', null);
+  const rows: any[] = firstData ?? [];
+  const total = count ?? rows.length;
+
+  // Páginas restantes em paralelo
+  if (total > LEADS_PAGE_SIZE) {
+    const pageRequests = [];
+    for (let from = LEADS_PAGE_SIZE; from < total; from += LEADS_PAGE_SIZE) {
+      pageRequests.push(buildQuery(false).range(from, from + LEADS_PAGE_SIZE - 1));
+    }
+    const results = await Promise.all(pageRequests);
+    for (const { data, error } of results) {
+      if (error) throw error;
+      if (data) rows.push(...data);
+    }
   }
 
-  const { data, error } = await query;
-  if (error) throw error;
-
-  const rows = data ?? [];
-  const total = rows.length;
-  const namesStr = unitIds.length > 0
-    ? Object.values(unitNames).join(', ')
-    : unitName || String(id_unidade);
-  const debugInfo = shouldFilterByUnit && (unitIds.length > 0 || id_unidade != null)
-    ? `Mostrando ${total} leads de ${unitIds.length > 1 ? `${unitIds.length} unidades` : `unidade ${namesStr}`}`
-    : isFullAdmin
-      ? `Admin: mostrando todos os ${total} leads`
-      : `Mostrando ${total} leads (sem unidade definida)`;
+  let debugInfo: string;
+  if (effective === 'all') {
+    debugInfo = `Mostrando todos os ${total} leads`;
+  } else if (typeof effective === 'number') {
+    const name = unitNames[effective] || `unidade ${effective}`;
+    debugInfo = `Mostrando ${total} leads de ${name}`;
+  } else if (unitIds.length > 0 || id_unidade != null) {
+    const namesStr = unitIds.length > 0
+      ? Object.values(unitNames).join(', ')
+      : unitName || String(id_unidade);
+    debugInfo = `Mostrando ${total} leads de ${unitIds.length > 1 ? `${unitIds.length} unidades` : `unidade ${namesStr}`}`;
+  } else {
+    debugInfo = `Mostrando ${total} leads (sem unidade definida)`;
+  }
 
   return { rows, debugInfo };
 }
@@ -159,9 +237,9 @@ async function fetchLastMessageDirections(contactIds: string[]) {
  */
 async function fetchEnrichedLeads(
   profile: UserProfile,
-  showAllUnits: boolean,
+  unitFilter: UnitFilter,
 ): Promise<LeadsResult> {
-  const { rows, debugInfo } = await fetchLeadsByProfile(profile, showAllUnits);
+  const { rows, debugInfo } = await fetchLeadsByProfile(profile, unitFilter);
 
   if (rows.length === 0) {
     return { leads: [], debugInfo, leadsToFix: [] };
@@ -212,7 +290,7 @@ async function fetchEnrichedLeads(
 
 interface UseLeadsOptions {
   profile: UserProfile;
-  showAllUnits: boolean;
+  unitFilter: UnitFilter;
   enabled?: boolean;
 }
 
@@ -228,24 +306,24 @@ interface UseLeadsOptions {
  * para preservar o comportamento atual. O CRMView continua mantendo o
  * Realtime em `messages` e usa `updateLead` para refletir mudanças.
  */
-export function useLeads({ profile, showAllUnits, enabled = true }: UseLeadsOptions) {
+export function useLeads({ profile, unitFilter, enabled = true }: UseLeadsOptions) {
   const queryClient = useQueryClient();
 
   const filters = useMemo(
     () => ({
-      showAllUnits,
+      unitFilter,
       isFullAdmin: profile.isFullAdmin,
       unitIds: profile.unitIds.slice().sort().join(','),
       id_unidade: profile.id_unidade,
     }),
-    [showAllUnits, profile.isFullAdmin, profile.unitIds, profile.id_unidade],
+    [unitFilter, profile.isFullAdmin, profile.unitIds, profile.id_unidade],
   );
 
   const queryKey = useMemo(() => queryKeys.leads.list(filters), [filters]);
 
   const query = useQuery({
     queryKey,
-    queryFn: () => fetchEnrichedLeads(profile, showAllUnits),
+    queryFn: () => fetchEnrichedLeads(profile, unitFilter),
     enabled: enabled && profile.isLoaded,
     staleTime: STALE_TIMES.list,
   });
