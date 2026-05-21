@@ -20,9 +20,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from './ui/select';
-import { LayoutGrid, List, Plus, Search, Filter, ChevronLeft, ChevronRight, Building2, Shield, RefreshCw, Star, Loader2, AlertTriangle } from 'lucide-react';
+import { LayoutGrid, List, Plus, Search, Filter, ChevronLeft, ChevronRight, Building2, Shield, RefreshCw, Star, Loader2, AlertTriangle, CalendarDays } from 'lucide-react';
+import { Popover, PopoverTrigger, PopoverContent } from './ui/popover';
+import { Calendar } from './ui/calendar';
 import { cn } from './ui/utils';
 import { toast } from 'sonner';
+import { startOfDay, endOfDay, subDays, format } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
+import type { DateRange } from 'react-day-picker';
 
 type ViewMode = 'kanban' | 'list';
 type ScoreFilter = 'all' | 'sem_nota' | '0-20' | '21-40' | '41-60' | '61-80' | '81-100';
@@ -39,6 +44,10 @@ export function CRMView() {
   const [currentPage, setCurrentPage] = useState(1);
   // Filtro de unidade: 'all' | 'mine' | '<id da unidade>'
   const [unitFilter, setUnitFilter] = useState<string>('mine');
+  // Filtro por data de criação do lead (undefined = sem filtro)
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
+  const [draftRange, setDraftRange] = useState<DateRange | undefined>(undefined);
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [paginatedLeads, setPaginatedLeads] = useState<LeadWithDetails[]>([]);
   const ITEMS_PER_PAGE = 50;
 
@@ -115,8 +124,39 @@ export function CRMView() {
       });
     }
 
+    if (dateRange?.from) {
+      const start = startOfDay(dateRange.from).getTime();
+      const end = endOfDay(dateRange.to ?? dateRange.from).getTime();
+      filtered = filtered.filter(lead => {
+        if (!lead.created_at) return false;
+        const t = new Date(lead.created_at).getTime();
+        return t >= start && t <= end;
+      });
+    }
+
     return filtered;
-  }, [leads, debouncedSearchTerm, statusFilter, scoreFilter]);
+  }, [leads, debouncedSearchTerm, statusFilter, scoreFilter, dateRange]);
+
+  function selectDatePreset(d: number) {
+    const today = new Date();
+    const range: DateRange = { from: startOfDay(subDays(today, d)), to: today };
+    setDraftRange(range);
+    setDateRange(range);
+    setDatePickerOpen(false);
+  }
+
+  function applyDateRange() {
+    if (draftRange?.from) {
+      setDateRange(draftRange);
+      setDatePickerOpen(false);
+    }
+  }
+
+  function clearDateRange() {
+    setDateRange(undefined);
+    setDraftRange(undefined);
+    setDatePickerOpen(false);
+  }
 
   // =============================================
   // 🔴 REALTIME: Escutar novas mensagens para atualizar bolinha vermelha
@@ -394,7 +434,7 @@ export function CRMView() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [debouncedSearchTerm, statusFilter, scoreFilter, unitFilter]);
+  }, [debouncedSearchTerm, statusFilter, scoreFilter, unitFilter, dateRange]);
 
   const totalPages = Math.ceil(filteredLeads.length / ITEMS_PER_PAGE);
   const startItem = (currentPage - 1) * ITEMS_PER_PAGE + 1;
@@ -716,6 +756,105 @@ export function CRMView() {
                 <SelectItem value="81-100">81-100</SelectItem>
               </SelectContent>
             </Select>
+
+            {/* Filtro por data de criação */}
+            <Popover
+              open={datePickerOpen}
+              onOpenChange={(open) => {
+                setDatePickerOpen(open);
+                if (open) setDraftRange(dateRange);
+              }}
+            >
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className={cn(
+                    "h-8 px-2.5 text-xs font-medium bg-white border rounded-md transition-colors flex items-center gap-1.5 flex-shrink-0 hover:border-[#0028e6]",
+                    dateRange?.from ? "border-[#0028e6] text-slate-700" : "border-slate-200 text-slate-500"
+                  )}
+                  title="Filtrar por data de criação"
+                >
+                  <CalendarDays className="w-3.5 h-3.5 flex-shrink-0" />
+                  {dateRange?.from ? (
+                    <span>
+                      {format(dateRange.from, "dd/MM", { locale: ptBR })}
+                      {dateRange.to && ` – ${format(dateRange.to, "dd/MM", { locale: ptBR })}`}
+                    </span>
+                  ) : (
+                    <span>Data de criação</span>
+                  )}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0" align="end">
+                <div className="flex">
+                  {/* Atalhos rápidos */}
+                  <div className="border-r border-slate-100 p-3 space-y-1 min-w-[150px]">
+                    <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 px-2">Atalhos</p>
+                    {[
+                      { label: 'Hoje', d: 0 },
+                      { label: 'Últimos 7 dias', d: 7 },
+                      { label: 'Últimos 15 dias', d: 15 },
+                      { label: 'Últimos 30 dias', d: 30 },
+                      { label: 'Últimos 60 dias', d: 60 },
+                      { label: 'Últimos 90 dias', d: 90 },
+                    ].map(({ label, d }) => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => selectDatePreset(d)}
+                        className="w-full text-left px-2 py-1.5 text-xs rounded-md text-slate-600 hover:bg-slate-50 transition-colors"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {/* Calendário + ações */}
+                  <div className="flex flex-col">
+                    <div className="p-2">
+                      <Calendar
+                        mode="range"
+                        selected={draftRange}
+                        onSelect={(range) => setDraftRange(range)}
+                        numberOfMonths={2}
+                        locale={ptBR}
+                        disabled={{ after: new Date() }}
+                      />
+                    </div>
+                    <div className="border-t border-slate-100 px-4 py-3 flex items-center justify-between gap-3">
+                      <span className="text-xs text-slate-500">
+                        {draftRange?.from ? (
+                          <>
+                            {format(draftRange.from, "dd/MM/yyyy", { locale: ptBR })}
+                            {draftRange.to && ` – ${format(draftRange.to, "dd/MM/yyyy", { locale: ptBR })}`}
+                          </>
+                        ) : (
+                          'Selecione o intervalo'
+                        )}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {dateRange?.from && (
+                          <button
+                            type="button"
+                            onClick={clearDateRange}
+                            className="h-8 px-3 text-xs font-medium text-slate-600 rounded-lg hover:bg-slate-100 transition-colors"
+                          >
+                            Limpar
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={applyDateRange}
+                          disabled={!draftRange?.from}
+                          className="h-8 px-4 text-xs font-medium bg-[#0028e6] text-white rounded-lg hover:bg-[#001ec0] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        >
+                          Aplicar
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
         </div>
 
