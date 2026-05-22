@@ -369,7 +369,7 @@ export function TemplateSelector({ conversation, onClose, onTemplateSent }: Temp
                 {selectedTemplate && mobileView === 'config' ? 'Configurar & Enviar' : 'Selecionar Template'}
               </DrawerTitle>
               <DrawerDescription className="text-xs text-blue-100 font-medium truncate leading-tight mt-0.5">
-                {conversation.contact.first_name} &bull; {conversation.contact.phone_number}
+                {conversation.contact?.first_name || conversation.contact?.display_name || 'Contato'} &bull; {conversation.contact?.phone_number}
               </DrawerDescription>
             </div>
             <Button variant="ghost" size="icon" className="text-white hover:bg-white/10 rounded-full h-7 w-7" onClick={onClose}>

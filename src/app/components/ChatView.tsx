@@ -883,12 +883,18 @@ export function ChatView({ conversation, onConversationUpdate }: ChatViewProps) 
     }
   }
 
-  const contactName = conversation.contact.first_name && conversation.contact.last_name 
+  // conversation.contact pode vir null quando o contato está em outra unidade
+  // e o RLS bloqueia o JOIN — não pode quebrar a tela inteira por causa disso.
+  const contactName = conversation.contact?.first_name && conversation.contact?.last_name
     ? `${conversation.contact.first_name} ${conversation.contact.last_name}`
-    : conversation.contact.display_name || conversation.contact.phone_number;
+    : conversation.contact?.display_name
+      || conversation.contact?.phone_number
+      || conversation.contact_name
+      || 'Contato indisponível';
 
-  const avatarInitial = conversation.contact.first_name?.[0]?.toUpperCase() || 
-                        conversation.contact.phone_number?.[0] || '?';
+  const avatarInitial = conversation.contact?.first_name?.[0]?.toUpperCase() ||
+                        conversation.contact?.phone_number?.[0] ||
+                        conversation.contact_name?.[0]?.toUpperCase() || '?';
 
   // AudioPlayer, DocumentCard, renderMessageContent -> extracted to MessageBubble.tsx
 
@@ -906,7 +912,7 @@ export function ChatView({ conversation, onConversationUpdate }: ChatViewProps) 
             <h2 className="text-[15px] font-semibold text-[#1B1B1B] truncate leading-tight">
               {contactName}
             </h2>
-            <p className="text-[12px] text-[#6B7280] truncate leading-tight mt-0.5">{conversation.contact.phone_number}</p>
+            <p className="text-[12px] text-[#6B7280] truncate leading-tight mt-0.5">{conversation.contact?.phone_number}</p>
           </div>
 
           {/* Action buttons - Lado direito */}
