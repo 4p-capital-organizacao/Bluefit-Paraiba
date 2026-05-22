@@ -125,7 +125,8 @@ export interface ConversationTag {
 
 // Tipos combinados para queries
 export interface ConversationWithDetails extends Conversation {
-  contact: Contact;
+  // Pode ser null: se o contato está em outra unidade, o RLS bloqueia o JOIN.
+  contact: Contact | null;
   contact_name?: string; // 🔥 Nome do contato (para exibição rápida)
   assigned_user?: Profile | null;
   unit?: Unit | null;
