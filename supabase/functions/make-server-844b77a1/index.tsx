@@ -2557,157 +2557,110 @@ app.patch("/make-server-844b77a1/api/conversations/:id/assign", authMiddleware, 
  * - Sem cargo: não vê nada
  */
 app.get("/make-server-844b77a1/api/contacts", async (c) => {
-  console.log('\n👥 [CONTACTS] Buscando contatos...');
+  // 🚀 Paginação server-side + filtros (search, unit_id, situation) server-side.
+  // Default 50 por página, máximo 100. RBAC aplicado (atendente/sup/gerente
+  // forçados pra unidade deles; admin pode escolher unit_id ou ver tudo).
+  const limit = Math.min(Math.max(parseInt(c.req.query('limit') || '50', 10), 1), 100);
+  const offset = Math.max(parseInt(c.req.query('offset') || '0', 10), 0);
+  const search = (c.req.query('search') || '').trim();
+  const unitIdParam = (c.req.query('unit_id') || '').trim();
+  const situationParam = (c.req.query('situation') || '').trim();
 
   try {
-    // 🔐 AUTENTICAÇÃO: Buscar usuário logado
     const userToken = c.req.header('X-User-Token');
-    
     if (!userToken) {
-      console.error('❌ [CONTACTS] Token de usuário não fornecido');
-      return c.json({
-        success: false,
-        error: 'Autenticação necessária'
-      }, 401);
+      return c.json({ success: false, error: 'Autenticação necessária' }, 401);
     }
 
-    // Obter dados do usuário logado
     const { data: { user }, error: userError } = await supabaseAdmin.auth.getUser(userToken);
-    
     if (userError || !user) {
-      console.error('❌ [CONTACTS] Erro ao obter usuário:', userError);
-      return c.json({
-        success: false,
-        error: 'Token inválido ou expirado'
-      }, 401);
+      return c.json({ success: false, error: 'Token inválido ou expirado' }, 401);
     }
 
-    const userId = user.id;
-    console.log('👤 [CONTACTS] Usuário logado:', userId);
-
-    // 🔍 Buscar profile do usuário com cargo e unidade
     const { data: profile, error: profileError } = await supabaseAdmin
       .from('profiles')
-      .select(`
-        id,
-        nome,
-        sobrenome,
-        email,
-        id_cargo,
-        id_unidade,
-        cargo:cargos!profiles_id_cargo_fkey(id, papeis)
-      `)
-      .eq('id', userId)
+      .select(`id, id_unidade, cargo:cargos!profiles_id_cargo_fkey(id, papeis)`)
+      .eq('id', user.id)
       .single();
 
     if (profileError || !profile) {
-      console.error('❌ [CONTACTS] Erro ao buscar profile:', profileError);
-      return c.json({
-        success: false,
-        error: 'Perfil do usuário não encontrado'
-      }, 404);
+      return c.json({ success: false, error: 'Perfil não encontrado' }, 404);
     }
 
-    const cargo = profile.cargo?.papeis;
+    const cargo = (profile.cargo as any)?.papeis;
     const unidadeId = profile.id_unidade;
 
-    console.log('📋 [CONTACTS] Cargo do usuário:', cargo);
-    console.log('🏢 [CONTACTS] Unidade do usuário:', unidadeId);
-
-    // 🔐 APLICAR FILTROS BASEADOS NO CARGO
-    let contactsQuery = supabaseAdmin
-      .from('contacts')
-      .select('*');
-
-    // 📌 REGRA 0: SEM CARGO - não tem acesso a nenhum contato
     if (cargo === 'Sem cargo' || !cargo) {
-      console.log('🚫 [CONTACTS] Usuário SEM CARGO - acesso negado');
-      return c.json({
-        success: true,
-        contacts: [],
-        total: 0,
-        message: 'Usuário sem permissão de acesso aos contatos'
-      });
+      return c.json({ success: true, contacts: [], total: 0, limit, offset, hasMore: false });
     }
-    // 📌 REGRA 1: ATENDENTE - vê todos os contatos da unidade
-    else if (cargo === 'Atendente') {
+
+    // RBAC: define o unit_id que será aplicado (cliente não pode bypassar)
+    let effectiveUnitId: string | null = null;
+    if (cargo === 'Atendente' || cargo === 'Supervisor' || cargo === 'Gerente') {
       if (!unidadeId) {
-        console.warn('⚠️ [CONTACTS] Atendente sem unidade definida');
-        return c.json({
-          success: false,
-          error: 'Atendente sem unidade definida'
-        }, 400);
+        return c.json({ success: false, error: `${cargo} sem unidade definida` }, 400);
       }
-      console.log('🔒 [CONTACTS] Filtro ATENDENTE: unit_id =', unidadeId);
-      contactsQuery = contactsQuery.eq('unit_id', unidadeId);
-    }
-    // 📌 REGRA 2: SUPERVISOR/GERENTE - vê todos contatos da unidade
-    else if (cargo === 'Supervisor' || cargo === 'Gerente') {
-      if (!unidadeId) {
-        console.warn('⚠️ [CONTACTS] Supervisor/Gerente sem unidade definida');
-        return c.json({
-          success: false,
-          error: 'Usuário de gestão sem unidade definida'
-        }, 400);
+      effectiveUnitId = String(unidadeId);
+    } else if (cargo === 'Administrador') {
+      // Admin pode filtrar por uma unidade específica via query param, ou ver tudo
+      if (unitIdParam && unitIdParam !== 'all') {
+        effectiveUnitId = unitIdParam;
       }
-      console.log(`🔓 [CONTACTS] Filtro ${cargo.toUpperCase()}: unit_id =`, unidadeId);
-      contactsQuery = contactsQuery.eq('unit_id', unidadeId);
-    }
-    // 📌 REGRA 3: ADMINISTRADOR - vê TODOS os contatos (sem filtro)
-    else if (cargo === 'Administrador') {
-      console.log('🔓 [CONTACTS] Filtro ADMINISTRADOR: sem restrição (todos os contatos)');
-      // Nenhum filtro aplicado — vê tudo
-    }
-    // ⚠️ CARGO DESCONHECIDO
-    else {
-      console.error('❌ [CONTACTS] Cargo desconhecido:', cargo);
-      return c.json({
-        success: false,
-        error: 'Cargo não reconhecido no sistema'
-      }, 403);
+    } else {
+      return c.json({ success: false, error: 'Cargo não reconhecido' }, 403);
     }
 
-    // Executar query com paginação para superar limite de 1000 do Supabase
-    let allContacts: any[] = [];
-    const PAGE_SIZE = 1000;
-    let offset = 0;
-    let hasMore = true;
+    // Monta a query com todos os filtros server-side + count exato
+    let query = supabaseAdmin
+      .from('contacts')
+      .select('*', { count: 'exact' });
 
-    while (hasMore) {
-      const { data: batch, error } = await contactsQuery
-        .order('created_at', { ascending: false })
-        .range(offset, offset + PAGE_SIZE - 1);
-
-      if (error) {
-        console.error('❌ Exceção ao buscar contatos:', error);
-        return c.json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Erro desconhecido'
-        }, 500);
-      }
-
-      allContacts = allContacts.concat(batch || []);
-
-      if (!batch || batch.length < PAGE_SIZE) {
-        hasMore = false;
-      } else {
-        offset += PAGE_SIZE;
-      }
+    if (effectiveUnitId) {
+      query = query.eq('unit_id', effectiveUnitId);
+    }
+    if (situationParam && situationParam !== 'all') {
+      query = query.eq('situation', situationParam);
+    }
+    if (search.length > 0) {
+      const pattern = `%${search}%`;
+      query = query.or(
+        `display_name.ilike.${pattern},first_name.ilike.${pattern},last_name.ilike.${pattern},phone_number.ilike.${pattern},wa_id.ilike.${pattern}`
+      );
     }
 
-    console.log(`✅ [CONTACTS] Retornando ${allContacts.length} contatos para ${cargo}`);
+    const { data, error, count } = await query
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (error) {
+      console.error('❌ [CONTACTS] Erro:', error);
+      return c.json({ success: false, error: error.message }, 500);
+    }
+
+    const returned = data || [];
+    const total = count || 0;
+    const hasMore = offset + returned.length < total;
+
+    console.log(
+      `✅ [CONTACTS] ${returned.length}/${total} ` +
+      `(offset=${offset}, search="${search}", unit=${effectiveUnitId ?? 'all'}, ` +
+      `situation=${situationParam || 'all'}) para ${cargo}`,
+    );
 
     return c.json({
       success: true,
-      contacts: allContacts,
-      total: allContacts.length
+      contacts: returned,
+      total,
+      limit,
+      offset,
+      hasMore,
     });
-
   } catch (error) {
-    console.error('❌ Exceção ao buscar contatos:', error);
+    console.error('❌ [CONTACTS] Exceção:', error);
     return c.json({
       success: false,
-      error: error instanceof Error ? error.message : 'Erro desconhecido'
+      error: error instanceof Error ? error.message : 'Erro desconhecido',
     }, 500);
   }
 });
