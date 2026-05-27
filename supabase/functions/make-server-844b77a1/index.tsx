@@ -1083,6 +1083,11 @@ app.post("/make-server-844b77a1/api/whatsapp/templates", authMiddleware, async (
       language: typeof body.language === 'string' ? body.language.trim() : 'pt_BR',
       category: body.category,
       body: typeof body.body === 'string' ? body.body : '',
+      bodyExamples: Array.isArray(body.bodyExamples)
+        ? body.bodyExamples
+            .filter((e: any) => typeof e === 'string')
+            .map((e: string) => e.trim())
+        : undefined,
       footer: typeof body.footer === 'string' ? body.footer.trim() : null,
       buttons: Array.isArray(body.buttons)
         ? body.buttons

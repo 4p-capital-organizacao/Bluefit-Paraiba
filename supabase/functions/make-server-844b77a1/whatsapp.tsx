@@ -890,11 +890,37 @@ export interface CreateTemplateInput {
   language: string; // ex: pt_BR
   category: 'MARKETING' | 'UTILITY' | 'AUTHENTICATION';
   body: string;
+  // Exemplos para as variáveis {{1}}, {{2}}, ... no body.
+  // A Meta EXIGE example.body_text quando o body tem placeholders —
+  // sem isso o template é rejeitado.
+  bodyExamples?: string[];
   footer?: string | null;
   buttons?: CreateTemplateButton[];
 }
 
 const TEMPLATE_NAME_RE = /^[a-z][a-z0-9_]{0,511}$/;
+
+/**
+ * Extrai variáveis do body de um template.
+ *  - `named`: ocorrências de {{nome_qualquer}} (não suportadas pela Meta neste fluxo).
+ *  - `distinct`: números únicos ordenados em {{1}}, {{2}}, ...
+ *  - `sequenceOk`: true se os números formam 1..N sem pular.
+ */
+function extractBodyVariables(body: string): {
+  named: string[];
+  distinct: number[];
+  sequenceOk: boolean;
+} {
+  const namedMatches = [...body.matchAll(/\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g)];
+  const numberedMatches = [...body.matchAll(/\{\{(\d+)\}\}/g)];
+  const distinct = [...new Set(numberedMatches.map((m) => Number(m[1])))].sort((a, b) => a - b);
+  const expected = distinct.map((_, i) => i + 1);
+  return {
+    named: namedMatches.map((m) => m[1]),
+    distinct,
+    sequenceOk: distinct.join(',') === expected.join(','),
+  };
+}
 
 function validateCreateTemplateInput(input: CreateTemplateInput): string | null {
   if (!input.name || !TEMPLATE_NAME_RE.test(input.name)) {
@@ -912,6 +938,25 @@ function validateCreateTemplateInput(input: CreateTemplateInput): string | null 
   if (input.body.length > 1024) {
     return 'Mensagem (body) excede 1024 caracteres.';
   }
+
+  // Variáveis no body: Meta só aceita {{1}}, {{2}}, ... em sequência, com example.
+  const vars = extractBodyVariables(input.body);
+  if (vars.named.length > 0) {
+    return `Variáveis nomeadas não são aceitas pela Meta neste fluxo. Substitua {{${vars.named[0]}}} por {{1}}, {{2}}, ...`;
+  }
+  if (vars.distinct.length > 0 && !vars.sequenceOk) {
+    return `Variáveis devem ser numeradas em sequência começando em {{1}} sem pular números (encontrado: ${vars.distinct.map((n) => `{{${n}}}`).join(', ')}).`;
+  }
+  if (vars.distinct.length > 0) {
+    const expected = vars.distinct.length;
+    if (!input.bodyExamples || input.bodyExamples.length !== expected) {
+      return `O body tem ${expected} variável(eis) — forneça um exemplo para cada uma.`;
+    }
+    if (input.bodyExamples.some((ex) => !ex || !ex.trim())) {
+      return 'Todos os exemplos de variáveis devem ser preenchidos.';
+    }
+  }
+
   if (input.footer && input.footer.length > 60) {
     return 'Rodapé excede 60 caracteres.';
   }
@@ -973,9 +1018,13 @@ export async function createWhatsAppTemplate(input: CreateTemplateInput): Promis
     }
 
     // Montar components no formato Meta
-    const components: any[] = [
-      { type: 'BODY', text: input.body },
-    ];
+    const bodyComponent: any = { type: 'BODY', text: input.body };
+    const bodyVars = extractBodyVariables(input.body);
+    if (bodyVars.distinct.length > 0 && input.bodyExamples && input.bodyExamples.length > 0) {
+      // Meta exige um array de arrays: cada item externo é um "set" de exemplos.
+      bodyComponent.example = { body_text: [input.bodyExamples] };
+    }
+    const components: any[] = [bodyComponent];
     if (input.footer && input.footer.trim().length > 0) {
       components.push({ type: 'FOOTER', text: input.footer });
     }
