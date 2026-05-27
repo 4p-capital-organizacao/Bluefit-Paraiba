@@ -1247,7 +1247,9 @@ export function ChatView({ conversation, onConversationUpdate }: ChatViewProps) 
         }
 
         return (
-          <div className="w-full border-t border-[#E5E7EB] bg-white overflow-hidden" style={{ flexShrink: 0 }}>
+          // Sem overflow-hidden aqui: o SnippetPicker é absolute bottom-full
+          // e precisa "escapar" pra cima do composer pra mostrar o cabeçalho.
+          <div className="w-full border-t border-[#E5E7EB] bg-white" style={{ flexShrink: 0 }}>
             {!isWithinWindow && (
               <div className="mx-4 mt-3 px-4 py-3 rounded-lg border-l-[3px]" style={{ backgroundColor: '#FEF3C7', borderLeftColor: '#F59E0B' }}>
                 <div className="flex items-center gap-2">
