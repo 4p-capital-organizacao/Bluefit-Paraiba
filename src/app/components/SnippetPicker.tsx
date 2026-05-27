@@ -142,7 +142,7 @@ export function SnippetPicker({ messageText, onPick, contact, consultor, unitNam
   return (
     <div
       ref={containerRef}
-      className="absolute bottom-full left-0 right-0 mx-4 md:mx-6 mb-2 max-h-[280px] overflow-y-auto z-30 rounded-xl bg-white border border-[#E5E7EB] shadow-2xl"
+      className="absolute bottom-full left-4 md:left-6 right-4 md:right-6 mb-2 max-w-2xl max-h-[280px] overflow-y-auto z-30 rounded-xl bg-white border border-[#E5E7EB] shadow-2xl"
       role="listbox"
     >
       <div className="sticky top-0 bg-white px-3 py-2 border-b border-[#F3F3F3] flex items-center gap-2 text-xs text-[#6B7280]">
