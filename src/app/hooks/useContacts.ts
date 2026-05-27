@@ -1,5 +1,5 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo } from 'react';
 import { authFetch, API_BASE } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import { queryKeys, STALE_TIMES } from '../lib/react-query';
@@ -18,92 +18,117 @@ export interface Contact {
   [key: string]: any;
 }
 
-interface ContactsResponse {
-  success: boolean;
-  contacts?: Contact[];
-  error?: string;
+interface UseContactsOptions {
+  search?: string;
+  unitId?: string;       // 'all' | '<id>'
+  situation?: string;    // 'all' | '<value>'
+  enabled?: boolean;
 }
 
-async function fetchContacts(): Promise<Contact[]> {
-  const response = await authFetch(`${API_BASE}/api/contacts`, { method: 'GET' });
-  const result: ContactsResponse = await response.json();
+interface ContactsPage {
+  contacts: Contact[];
+  total: number;
+  hasMore: boolean;
+  offset: number;
+}
 
+const PAGE_SIZE = 50;
+
+async function fetchContactsPage(
+  { pageParam = 0 }: { pageParam?: number },
+  filters: { search: string; unitId: string; situation: string },
+): Promise<ContactsPage> {
+  const params = new URLSearchParams({
+    limit: String(PAGE_SIZE),
+    offset: String(pageParam),
+  });
+  if (filters.search) params.set('search', filters.search);
+  if (filters.unitId && filters.unitId !== 'all') params.set('unit_id', filters.unitId);
+  if (filters.situation && filters.situation !== 'all') params.set('situation', filters.situation);
+
+  const response = await authFetch(`${API_BASE}/api/contacts?${params.toString()}`, { method: 'GET' });
+  const result = await response.json();
   if (!response.ok || !result.success) {
     throw new Error(result.error || 'Erro ao carregar contatos');
   }
-
-  return result.contacts ?? [];
+  const contacts: Contact[] = result.contacts ?? [];
+  return {
+    contacts,
+    total: result.total ?? 0,
+    hasMore: !!result.hasMore,
+    offset: pageParam + contacts.length,
+  };
 }
 
 /**
- * Hook para listar contatos com cache + realtime seletivo.
+ * Hook para listar contatos com paginação + filtros server-side.
  *
- * - 1ª visita: busca via edge function (RBAC server-side aplicado lá).
- * - Próximas visitas: cache hit instantâneo (staleTime 60s, gcTime 5min).
- * - Realtime UPDATE: muta o item em cache sem refetch.
- * - Realtime INSERT/DELETE: invalida com debounce 2s (evita rajada).
- *
- * NOTA: filtros (busca, unidade, situação) ficam client-side por ora
- * porque a edge function `/api/contacts` ainda devolve a lista inteira.
- * Quando ela ganhar paginação/filtros server-side, este hook passará
- * a aceitar `{ unit, situation, search }` e usar `useInfiniteQuery`.
+ * - Backend (`/api/contacts`) aceita `limit`, `offset`, `search`, `unit_id`,
+ *   `situation` e aplica RBAC server-side (atendente/sup/gerente forçados
+ *   pra unidade deles; admin pode escolher).
+ * - Filtros viram parte da query key → trocar de filtro dispara refetch
+ *   (com `placeholderData` mantendo a tela viva enquanto carrega).
+ * - Scroll infinito via `fetchNextPage()` no consumidor.
+ * - Realtime: qualquer mudança (INSERT/UPDATE/DELETE) invalida com debounce.
+ *   Patches cirúrgicos em listas paginadas são complexos demais pro retorno.
  */
-export function useContacts() {
+export function useContacts(options: UseContactsOptions = {}) {
   const queryClient = useQueryClient();
+  const filters = useMemo(
+    () => ({
+      search: options.search?.trim() ?? '',
+      unitId: options.unitId ?? 'all',
+      situation: options.situation ?? 'all',
+    }),
+    [options.search, options.unitId, options.situation],
+  );
+
   const debouncedInvalidate = useDebouncedInvalidation(queryKeys.contacts.all);
 
-  const query = useQuery({
-    queryKey: queryKeys.contacts.list(),
-    queryFn: fetchContacts,
+  const query = useInfiniteQuery({
+    queryKey: queryKeys.contacts.infinite(filters),
+    queryFn: (ctx) => fetchContactsPage(ctx as { pageParam: number }, filters),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.offset : undefined),
+    enabled: options.enabled ?? true,
     staleTime: STALE_TIMES.list,
+    placeholderData: (previous) => previous,
   });
 
+  // Realtime: qualquer mudança em contacts invalida cache (debounced).
   useEffect(() => {
     const channel = supabase
       .channel('contacts-realtime-cache')
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'contacts' },
-        (payload) => {
-          const updated = payload.new as Contact;
-          queryClient.setQueryData<Contact[]>(queryKeys.contacts.list(), (old) => {
-            if (!old) return old;
-            return old.map((c) => (String(c.id) === String(updated.id) ? { ...c, ...updated } : c));
-          });
-        },
-      )
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'contacts' },
+        { event: '*', schema: 'public', table: 'contacts' },
         () => debouncedInvalidate(),
-      )
-      .on(
-        'postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'contacts' },
-        (payload) => {
-          const deletedId = (payload.old as Partial<Contact>)?.id;
-          if (deletedId == null) {
-            debouncedInvalidate();
-            return;
-          }
-          queryClient.setQueryData<Contact[]>(queryKeys.contacts.list(), (old) => {
-            if (!old) return old;
-            return old.filter((c) => String(c.id) !== String(deletedId));
-          });
-        },
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [queryClient, debouncedInvalidate]);
+  }, [debouncedInvalidate]);
+
+  const contacts = useMemo(
+    () => query.data?.pages.flatMap((p) => p.contacts) ?? [],
+    [query.data],
+  );
+  const total = query.data?.pages[0]?.total ?? 0;
+
+  const refresh = () => queryClient.invalidateQueries({ queryKey: queryKeys.contacts.all });
 
   return {
-    contacts: query.data ?? [],
+    contacts,
+    total,
     isLoading: query.isLoading,
     isFetching: query.isFetching,
-    error: query.error,
+    isFetchingNextPage: query.isFetchingNextPage,
+    hasNextPage: !!query.hasNextPage,
+    fetchNextPage: query.fetchNextPage,
     refetch: query.refetch,
+    refresh,
+    error: query.error,
   };
 }

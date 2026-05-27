@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { Search, UserPlus, Phone, MapPin, Edit, Trash2, MessageCircle } from 'lucide-react';
 import { Button } from '@/app/components/ui/button';
@@ -34,14 +34,27 @@ export function ContactsModule() {
   const { authUser } = useAuth();
   const accessToken = authUser?.accessToken || '';
 
-  // 🚀 Cache via React Query (substitui useState/useEffect/loadContacts/realtime)
-  const { contacts, isLoading: loading, refetch: refetchContacts } = useContacts();
-  const { units } = useUnits();
-
   const [searchTerm, setSearchTerm] = useState('');
   const debouncedSearchTerm = useDebouncedValue(searchTerm, 300);
   const [unitFilter, setUnitFilter] = useState<string>('all');
   const [situationFilter, setSituationFilter] = useState<string>('all');
+
+  // 🚀 Paginação + filtros server-side via useInfiniteQuery
+  const {
+    contacts,
+    total,
+    isLoading: loading,
+    isFetching,
+    isFetchingNextPage,
+    hasNextPage,
+    fetchNextPage,
+    refetch: refetchContacts,
+  } = useContacts({
+    search: debouncedSearchTerm,
+    unitId: unitFilter,
+    situation: situationFilter,
+  });
+  const { units } = useUnits();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -54,45 +67,52 @@ export function ContactsModule() {
   const canDelete = userProfile.isLoaded && userProfile.isAdmin;
   const canEditUnit = userProfile.isLoaded && userProfile.isAdmin;
 
-  // 🔗 Deep link: abrir edição de contato via URL
+  // 🔗 Deep link: abrir edição de contato via URL.
+  // Como a lista é paginada, o contato pode não estar nas páginas carregadas
+  // — busca direto pelo id como fallback.
   useEffect(() => {
-    if (contactId && contacts.length > 0) {
-      const contact = contacts.find(c => String(c.id) === String(contactId));
-      if (contact) {
-        setSelectedContact(contact);
-        setShowEditDialog(true);
-      } else {
-        toast.error('Contato não encontrado');
-        navigate('/contacts', { replace: true });
-      }
+    if (!contactId) return;
+    const fromList = contacts.find(c => String(c.id) === String(contactId));
+    if (fromList) {
+      setSelectedContact(fromList);
+      setShowEditDialog(true);
+      return;
     }
+    let cancelled = false;
+    supabase
+      .from('contacts')
+      .select('*')
+      .eq('id', contactId)
+      .single()
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error || !data) {
+          toast.error('Contato não encontrado');
+          navigate('/contacts', { replace: true });
+          return;
+        }
+        setSelectedContact(data as Contact);
+        setShowEditDialog(true);
+      });
+    return () => { cancelled = true; };
   }, [contactId, contacts, navigate]);
 
-  // Filtro client-side memoizado (search debounced p/ não rodar a cada tecla)
-  const filteredContacts = useMemo(() => {
-    let result = contacts;
-
-    if (debouncedSearchTerm) {
-      const search = debouncedSearchTerm.toLowerCase();
-      result = result.filter(contact =>
-        contact.display_name?.toLowerCase().includes(search) ||
-        contact.first_name?.toLowerCase().includes(search) ||
-        contact.last_name?.toLowerCase().includes(search) ||
-        contact.phone_number?.includes(search) ||
-        contact.wa_id?.includes(search)
-      );
-    }
-
-    if (unitFilter !== 'all') {
-      result = result.filter(contact => String(contact.unit_id) === String(unitFilter));
-    }
-
-    if (situationFilter !== 'all') {
-      result = result.filter(contact => contact.situation === situationFilter);
-    }
-
-    return result;
-  }, [contacts, debouncedSearchTerm, unitFilter, situationFilter]);
+  // 🔽 Scroll infinito: carrega próxima página quando sentinela entra na viewport
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = loadMoreRef.current;
+    if (!el || !hasNextPage) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && !isFetchingNextPage) {
+          fetchNextPage();
+        }
+      },
+      { rootMargin: '300px' },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   function getSituationBadgeColor(situation: string) {
     const colorMap: Record<string, string> = {
@@ -313,7 +333,7 @@ export function ContactsModule() {
           <div className="flex items-center justify-center h-64">
             <div className="text-[#9CA3AF]">Carregando contatos...</div>
           </div>
-        ) : filteredContacts.length === 0 ? (
+        ) : contacts.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64">
             <UserPlus className="w-12 h-12 text-[#9CA3AF] mb-3" />
             <p className="text-[#4B5563] text-lg font-medium">Nenhum contato encontrado</p>
@@ -327,7 +347,7 @@ export function ContactsModule() {
           <>
             {/* Mobile View - Cards */}
             <div className="md:hidden space-y-3">
-              {filteredContacts.map((contact) => {
+              {contacts.map((contact) => {
                 const initials = contact.first_name?.[0]?.toUpperCase() || contact.display_name?.[0]?.toUpperCase() || '?';
 
                 const displayPrimaryName = contact.first_name
@@ -420,7 +440,7 @@ export function ContactsModule() {
               </div>
 
               <div className="divide-y divide-[#F3F3F3]">
-                {filteredContacts.map((contact) => {
+                {contacts.map((contact) => {
                   const initials = contact.first_name?.[0]?.toUpperCase() || contact.display_name?.[0]?.toUpperCase() || '?';
 
                   const displayPrimaryName = contact.first_name
@@ -509,6 +529,15 @@ export function ContactsModule() {
                 })}
               </div>
             </div>
+
+            {/* Sentinela do scroll infinito + indicador de loading da próxima página */}
+            <div ref={loadMoreRef} className="py-4 flex items-center justify-center">
+              {isFetchingNextPage ? (
+                <span className="text-xs text-[#9CA3AF]">Carregando mais contatos...</span>
+              ) : !hasNextPage && contacts.length > 0 ? (
+                <span className="text-xs text-[#9CA3AF]">Fim da lista</span>
+              ) : null}
+            </div>
           </>
         )}
       </div>
@@ -517,11 +546,10 @@ export function ContactsModule() {
       <div className="bg-white border-t border-[#E5E7EB] px-4 md:px-6 py-2 md:py-3">
         <div className="flex items-center justify-between text-xs md:text-sm">
           <span className="text-[#6B7280]">
-            Total: <strong className="text-[#1B1B1B]">{filteredContacts.length}</strong> contato(s)
-            {(searchTerm || unitFilter !== 'all' || situationFilter !== 'all') && (
-              <span className="text-[#9CA3AF] ml-2 hidden sm:inline">
-                (de {contacts.length} no total)
-              </span>
+            Mostrando <strong className="text-[#1B1B1B]">{contacts.length}</strong> de{' '}
+            <strong className="text-[#1B1B1B]">{total}</strong> contato(s)
+            {isFetching && !isFetchingNextPage && (
+              <span className="text-[#9CA3AF] ml-2 hidden sm:inline">atualizando…</span>
             )}
           </span>
         </div>
