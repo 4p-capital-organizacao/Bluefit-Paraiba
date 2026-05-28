@@ -212,7 +212,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!userId) return;
 
-    // ── 1) Nova mensagem (incoming) ──────────────────────
+    // ── 1) Nova mensagem (inbound) ───────────────────────
     const messagesChannel = supabase
       .channel('notif-messages')
       .on(
@@ -221,7 +221,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           event: 'INSERT',
           schema: 'public',
           table: 'messages',
-          filter: 'direction=eq.incoming',
+          filter: 'direction=eq.inbound',
         },
         async (payload) => {
           const { userId: uid, userUnitIds } = stateRef.current;
