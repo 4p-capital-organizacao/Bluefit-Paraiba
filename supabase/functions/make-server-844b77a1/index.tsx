@@ -161,6 +161,104 @@ async function saveOutboundMessage(params: {
   }
 }
 
+// ========================================
+// 🚦 TRAVA DE ENVIO DE TEMPLATES (anti-spam / custo Meta)
+// ========================================
+
+// Intervalo mínimo exigido entre templates consecutivos sem resposta do cliente.
+// streak = nº de templates outbound enviados DESDE a última resposta inbound.
+//   streak 0 → 1º template: liberado
+//   streak 1 → 2º template: só após 24h do último
+//   streak 2 → 3º template: só após 48h do último
+//   streak >=3 → trava dura até o cliente responder
+const TEMPLATE_THROTTLE_HOURS: Record<number, number> = { 1: 24, 2: 48 };
+const TEMPLATE_THROTTLE_HARD_BLOCK_AT = 3;
+
+interface TemplateThrottleResult {
+  allowed: boolean;
+  streak: number;
+  lastTemplateAt: string | null;
+  requiredHours: number | null;
+  nextAllowedAt: string | null;
+  hardBlocked: boolean;
+  reason: 'ok' | 'wait' | 'hard_block' | 'no_conversation' | 'error';
+}
+
+/**
+ * Avalia se um novo template pode ser enviado para a conversa, aplicando a trava
+ * progressiva (24h / 48h / hard block). Qualquer mensagem inbound do cliente reseta
+ * a contagem. Em caso de erro de query, NÃO bloqueia (fail-open) para não derrubar o
+ * envio por um bug — apenas loga.
+ */
+async function evaluateTemplateThrottle(
+  conversationId?: string | number | null,
+): Promise<TemplateThrottleResult> {
+  const base: TemplateThrottleResult = {
+    allowed: true, streak: 0, lastTemplateAt: null,
+    requiredHours: null, nextAllowedAt: null, hardBlocked: false, reason: 'ok',
+  };
+
+  if (!conversationId) return { ...base, reason: 'no_conversation' };
+
+  try {
+    // 1) Última resposta inbound do cliente (marco que reseta a contagem)
+    const { data: inbound } = await supabaseAdmin
+      .from('messages')
+      .select('sent_at, created_at')
+      .eq('conversation_id', conversationId)
+      .eq('direction', 'inbound')
+      .order('sent_at', { ascending: false })
+      .limit(1);
+
+    const lastInboundAt = inbound && inbound.length > 0
+      ? (inbound[0].sent_at || inbound[0].created_at)
+      : null;
+
+    // 2) Templates outbound enviados DEPOIS da última resposta (a "streak")
+    let q = supabaseAdmin
+      .from('messages')
+      .select('sent_at, created_at')
+      .eq('conversation_id', conversationId)
+      .eq('direction', 'outbound')
+      .eq('type', 'template')
+      .order('sent_at', { ascending: false });
+
+    if (lastInboundAt) q = q.gt('sent_at', lastInboundAt);
+
+    const { data: templates } = await q;
+
+    const streak = templates?.length || 0;
+    if (streak === 0) return { ...base, streak: 0, reason: 'ok' };
+
+    const lastTemplateAt = templates![0].sent_at || templates![0].created_at;
+
+    // streak >= 3 → trava dura (até o cliente responder)
+    if (streak >= TEMPLATE_THROTTLE_HARD_BLOCK_AT) {
+      return {
+        allowed: false, streak, lastTemplateAt,
+        requiredHours: null, nextAllowedAt: null,
+        hardBlocked: true, reason: 'hard_block',
+      };
+    }
+
+    const requiredHours = TEMPLATE_THROTTLE_HOURS[streak]; // 1→24h, 2→48h
+    const nextAllowedMs = new Date(lastTemplateAt).getTime() + requiredHours * 3600_000;
+
+    if (Date.now() >= nextAllowedMs) {
+      return { ...base, allowed: true, streak, lastTemplateAt, requiredHours, reason: 'ok' };
+    }
+
+    return {
+      allowed: false, streak, lastTemplateAt, requiredHours,
+      nextAllowedAt: new Date(nextAllowedMs).toISOString(),
+      hardBlocked: false, reason: 'wait',
+    };
+  } catch (err) {
+    console.error('⚠️ [THROTTLE] Erro ao avaliar trava de template (fail-open):', err);
+    return { ...base, reason: 'error' };
+  }
+}
+
 /**
  * Busca o texto renderizado de um template (HEADER + BODY) direto no Graph API
  * da Meta. Usado para gravar o body real da mensagem no chat ao enviar templates
@@ -1277,6 +1375,29 @@ app.post("/make-server-844b77a1/api/automation/run-followup", async (c) => {
           continue;
         }
 
+        // 🚦 TRAVA: respeita o mesmo intervalo entre templates (24h/48h/hard-block).
+        // Defesa extra além da cadência da RPC — evita reenvio acumulado sem resposta.
+        if (lead.conversation_id) {
+          const throttle = await evaluateTemplateThrottle(lead.conversation_id);
+          if (!throttle.allowed) {
+            console.warn(`🚦 [AUTOMATION] Lead ${lead.lead_id} bloqueado pela trava (streak=${throttle.streak}, reason=${throttle.reason})`);
+            await supabaseAdmin.from('automated_message_log').insert({
+              template_name: templateName,
+              language: templateLanguage,
+              lead_id: lead.lead_id,
+              conversation_id: lead.conversation_id,
+              contact_id: lead.contact_id,
+              unit_id: unitId,
+              reason: 'sla_followup_72h',
+              status: 'skipped',
+              error_message: throttle.hardBlocked
+                ? `Trava: ${throttle.streak} templates sem resposta (hard block)`
+                : `Trava: aguardando ${throttle.requiredHours}h sem resposta (streak ${throttle.streak})`,
+            });
+            continue;
+          }
+        }
+
         // Envia template via Meta
         const sendResult = await whatsapp.sendWhatsAppTemplate({
           to: phone,
@@ -1540,6 +1661,16 @@ app.post("/make-server-844b77a1/api/whatsapp/send-template", authMiddleware, asy
     console.log('- Idioma:', languageCode || 'pt_BR');
     console.log('- Parâmetros:', parameters);
 
+    // 🚦 TRAVA: valida o intervalo entre templates ANTES de gastar envio na Meta
+    const throttle = await evaluateTemplateThrottle(conversationId);
+    if (!throttle.allowed) {
+      console.warn(`🚦 [SEND TEMPLATE] Bloqueado pela trava (streak=${throttle.streak}, reason=${throttle.reason})`);
+      const errorMsg = throttle.hardBlocked
+        ? `Este cliente já recebeu ${throttle.streak} templates sem responder. Aguarde uma resposta antes de enviar outro template — ou feche a conversa / mova o lead para a Base Fria.`
+        : `Trava de envio: o ${throttle.streak + 1}º template para este cliente só pode ser enviado após ${throttle.requiredHours}h do último. Liberado em ${new Date(throttle.nextAllowedAt!).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}.`;
+      return c.json({ success: false, error: errorMsg, throttle, blocked: true }, 429);
+    }
+
     // ✅ Passar como objeto (interface SendTemplateParams)
     const result = await whatsapp.sendWhatsAppTemplate({
       to,
@@ -1623,6 +1754,73 @@ app.post("/make-server-844b77a1/api/whatsapp/send-template", authMiddleware, asy
     return c.json({
       success: false,
       error: error instanceof Error ? error.message : 'Erro desconhecido'
+    }, 500);
+  }
+});
+
+/**
+ * POST /api/conversations/:id/move-to-base-fria
+ * Move o lead vinculado à conversa para a Base Fria (tira da esteira do operador).
+ * Usado quando o cliente não respondeu após os 3 templates (trava dura).
+ * 🔐 PROTEGIDO - Requer autenticação
+ */
+app.post("/make-server-844b77a1/api/conversations/:id/move-to-base-fria", authMiddleware, async (c) => {
+  const conversationId = c.req.param('id');
+  console.log('\n❄️ [BASE FRIA] Movendo lead da conversa', conversationId);
+
+  try {
+    // 1) Conversa → contact_id
+    const { data: conv, error: convErr } = await supabaseAdmin
+      .from('conversations')
+      .select('id, contact_id')
+      .eq('id', conversationId)
+      .maybeSingle();
+
+    if (convErr) return c.json({ success: false, error: convErr.message }, 500);
+    if (!conv || !(conv as any).contact_id) {
+      return c.json({ success: false, error: 'Conversa ou contato não encontrado' }, 404);
+    }
+
+    // 2) Lead pelo contato (ignora os que já estão em base_fria)
+    const { data: lead, error: leadErr } = await supabaseAdmin
+      .from('leads')
+      .select('id, situacao')
+      .eq('id_contact', (conv as any).contact_id)
+      .neq('situacao', 'base_fria')
+      .limit(1)
+      .maybeSingle();
+
+    if (leadErr) return c.json({ success: false, error: leadErr.message }, 500);
+    if (!lead) {
+      return c.json({ success: false, error: 'Nenhum lead ativo encontrado para este contato' }, 404);
+    }
+
+    // 3) Atualiza situacao + histórico
+    const { error: updErr } = await supabaseAdmin
+      .from('leads')
+      .update({
+        situacao: 'base_fria',
+        motivo_cancelamento: 'Movido manualmente (sem resposta após templates)',
+      })
+      .eq('id', (lead as any).id);
+
+    if (updErr) return c.json({ success: false, error: updErr.message }, 500);
+
+    await supabaseAdmin.from('lead_history').insert({
+      lead_id: (lead as any).id,
+      field_changed: 'situacao',
+      old_value: (lead as any).situacao,
+      new_value: 'base_fria',
+      changed_at: new Date().toISOString(),
+    });
+
+    console.log('✅ [BASE FRIA] Lead', (lead as any).id, 'movido para base_fria');
+    return c.json({ success: true, leadId: (lead as any).id });
+  } catch (error) {
+    console.error('❌ [BASE FRIA] Erro:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Erro desconhecido',
     }, 500);
   }
 });
