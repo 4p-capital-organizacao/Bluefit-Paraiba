@@ -187,6 +187,110 @@ export async function fetchAvailableTemplates(
   }
 }
 
+// ========================================
+// 🚦 TRAVA DE ENVIO DE TEMPLATES (espelha a regra do backend)
+// ========================================
+
+// streak = nº de templates outbound enviados desde a última resposta inbound.
+//   0 → 1º livre | 1 → 2º só após 24h | 2 → 3º só após 48h | >=3 → trava dura
+const TEMPLATE_THROTTLE_HOURS: Record<number, number> = { 1: 24, 2: 48 };
+const TEMPLATE_THROTTLE_HARD_BLOCK_AT = 3;
+
+export interface TemplateThrottleStatus {
+  allowed: boolean;
+  streak: number;
+  lastTemplateAt: Date | null;
+  requiredHours: number | null;
+  nextAllowedAt: Date | null;
+  hardBlocked: boolean;
+}
+
+/**
+ * Avalia (no cliente, para UX) se um novo template pode ser enviado para a conversa.
+ * O backend é a fonte da verdade — isto só mostra o cadeado/contagem ao operador.
+ * Em caso de erro, libera (fail-open) — o backend ainda barra se preciso.
+ */
+export async function getTemplateThrottleStatus(conversationId: string): Promise<TemplateThrottleStatus> {
+  const allowed: TemplateThrottleStatus = {
+    allowed: true, streak: 0, lastTemplateAt: null,
+    requiredHours: null, nextAllowedAt: null, hardBlocked: false,
+  };
+
+  try {
+    // Última resposta inbound (reseta a contagem)
+    const { data: inbound } = await supabase
+      .from('messages')
+      .select('sent_at')
+      .eq('conversation_id', conversationId)
+      .eq('direction', 'inbound')
+      .order('sent_at', { ascending: false })
+      .limit(1);
+
+    const lastInboundAt = inbound && inbound.length > 0 ? inbound[0].sent_at : null;
+
+    // Templates outbound desde a última resposta
+    let query = supabase
+      .from('messages')
+      .select('sent_at')
+      .eq('conversation_id', conversationId)
+      .eq('direction', 'outbound')
+      .eq('type', 'template')
+      .order('sent_at', { ascending: false });
+
+    if (lastInboundAt) query = query.gt('sent_at', lastInboundAt);
+
+    const { data: templates } = await query;
+
+    const streak = templates?.length || 0;
+    if (streak === 0) return allowed;
+
+    const lastTemplateAt = new Date(templates![0].sent_at);
+
+    if (streak >= TEMPLATE_THROTTLE_HARD_BLOCK_AT) {
+      return { allowed: false, streak, lastTemplateAt, requiredHours: null, nextAllowedAt: null, hardBlocked: true };
+    }
+
+    const requiredHours = TEMPLATE_THROTTLE_HOURS[streak];
+    const nextAllowedAt = new Date(lastTemplateAt.getTime() + requiredHours * 3600_000);
+
+    if (Date.now() >= nextAllowedAt.getTime()) {
+      return { ...allowed, streak, lastTemplateAt, requiredHours };
+    }
+
+    return { allowed: false, streak, lastTemplateAt, requiredHours, nextAllowedAt, hardBlocked: false };
+  } catch {
+    return allowed;
+  }
+}
+
+/**
+ * Move o lead vinculado à conversa para a Base Fria (tira da esteira do operador).
+ */
+export async function moveConversationToBaseFria(conversationId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) return { success: false, error: 'Sessão não autenticada' };
+
+    const response = await fetch(`${SERVER_URL}/api/conversations/${conversationId}/move-to-base-fria`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${publicAnonKey}`,
+        'X-User-Token': token,
+      },
+    });
+
+    const data = await response.json().catch(() => ({ success: false, error: 'Resposta inválida do servidor' }));
+    if (!response.ok || !data.success) {
+      return { success: false, error: data.error || `Erro HTTP ${response.status}` };
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Erro de conexão' };
+  }
+}
+
 /**
  * Verifica se a conversa está dentro da janela de 24h do WhatsApp
  */

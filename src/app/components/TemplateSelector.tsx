@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
-import { FileText, Send, X, Info, Search, Settings2, Eye, CheckCircle2, ChevronLeft, Zap, Link as LinkIcon } from 'lucide-react';
+import { FileText, Send, X, Info, Search, Settings2, Eye, CheckCircle2, ChevronLeft, Zap, Link as LinkIcon, Lock, Clock, Snowflake, Archive } from 'lucide-react';
 import { ConversationWithDetails, WhatsAppTemplate } from '../types/database';
-import { fetchAvailableTemplates, sendWhatsAppTemplate } from '../lib/whatsapp';
+import { fetchAvailableTemplates, sendWhatsAppTemplate, getTemplateThrottleStatus, moveConversationToBaseFria, TemplateThrottleStatus } from '../lib/whatsapp';
 import {
   Drawer,
   DrawerContent,
@@ -46,10 +46,71 @@ export function TemplateSelector({ conversation, onClose, onTemplateSent }: Temp
   const [headerMediaUrl, setHeaderMediaUrl] = useState<string>('');
   const [sending, setSending] = useState(false);
   const [mobileView, setMobileView] = useState<'list' | 'config'>('list');
+  const [throttle, setThrottle] = useState<TemplateThrottleStatus | null>(null);
+  const [actioning, setActioning] = useState(false);
 
   useEffect(() => {
     loadTemplates();
+    refreshThrottle();
   }, []);
+
+  async function refreshThrottle() {
+    try {
+      const status = await getTemplateThrottleStatus(conversation.id);
+      setThrottle(status);
+    } catch {
+      setThrottle(null);
+    }
+  }
+
+  // Fecha a conversa (mesma regra do ChatView): tira da esteira do operador.
+  async function handleCloseConversation() {
+    setActioning(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast.error('Você precisa estar logado para fechar conversas');
+        return;
+      }
+      const { error } = await supabase
+        .from('conversations')
+        .update({ status: 'closed', closed_at: new Date().toISOString() })
+        .eq('id', conversation.id);
+      if (error) {
+        toast.error('Erro ao fechar conversa: ' + error.message);
+        return;
+      }
+      await supabase.from('conversation_events').insert({
+        conversation_id: conversation.id,
+        event_type: 'status_changed',
+        actor_user_id: user.id,
+        metadata: { new_status: 'closed', old_status: conversation.status },
+      });
+      toast.success('Conversa fechada');
+      onTemplateSent();
+      onClose();
+    } catch {
+      toast.error('Erro ao fechar conversa');
+    } finally {
+      setActioning(false);
+    }
+  }
+
+  async function handleMoveToBaseFria() {
+    setActioning(true);
+    try {
+      const result = await moveConversationToBaseFria(conversation.id);
+      if (!result.success) {
+        toast.error('Erro ao mover para Base Fria', { description: result.error });
+        return;
+      }
+      toast.success('Lead movido para a Base Fria');
+      onTemplateSent();
+      onClose();
+    } finally {
+      setActioning(false);
+    }
+  }
 
   async function loadTemplates() {
     setLoading(true);
@@ -194,6 +255,17 @@ export function TemplateSelector({ conversation, onClose, onTemplateSent }: Temp
   async function handleSendTemplate() {
     if (!selectedTemplate || !templateInfo) return;
 
+    // 🚦 Trava: barra no cliente (o backend também barra como fonte da verdade)
+    if (throttle && !throttle.allowed) {
+      toast.error('Envio de template travado para este cliente', {
+        description: throttle.hardBlocked
+          ? `Já foram enviados ${throttle.streak} templates sem resposta. Aguarde o cliente responder.`
+          : `O ${throttle.streak + 1}º template só libera em ${formatCountdown(throttle.nextAllowedAt)}.`,
+        duration: 7000,
+      });
+      return;
+    }
+
     const needsHeaderVars = templateInfo.headerVarCount > 0 && templateInfo.headerFormat === 'TEXT';
     const needsBodyVars = templateInfo.bodyVarCount > 0;
     const needsButtonVars = templateInfo.buttonVarCount > 0;
@@ -337,6 +409,40 @@ export function TemplateSelector({ conversation, onClose, onTemplateSent }: Temp
       return val || match;
     });
   };
+
+  function formatCountdown(target: Date | null): string {
+    if (!target) return 'em breve';
+    const ms = target.getTime() - Date.now();
+    if (ms <= 0) return 'agora';
+    const totalMin = Math.ceil(ms / 60000);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    if (h >= 1) return `${h}h${m > 0 ? ` ${m}min` : ''}`;
+    return `${m}min`;
+  }
+
+  const isBlocked = !!throttle && !throttle.allowed;
+  const isHardBlocked = !!throttle?.hardBlocked;
+
+  const throttleBanner = isBlocked ? (
+    <div className={`rounded-lg border p-2.5 flex gap-2 ${isHardBlocked ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+      {isHardBlocked
+        ? <Lock className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+        : <Clock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />}
+      <div className="min-w-0">
+        <p className={`text-[11px] font-bold ${isHardBlocked ? 'text-red-900' : 'text-amber-900'}`}>
+          {isHardBlocked
+            ? `Trava: ${throttle!.streak} templates enviados sem resposta`
+            : `Aguardando intervalo do ${throttle!.streak + 1}º template`}
+        </p>
+        <p className={`text-[10px] mt-0.5 ${isHardBlocked ? 'text-red-700' : 'text-amber-700'}`}>
+          {isHardBlocked
+            ? 'Aguarde o cliente responder antes de enviar outro template. Se não houver resposta, feche a conversa ou mova o lead para a Base Fria.'
+            : `O próximo template só pode ser enviado em ${formatCountdown(throttle!.nextAllowedAt)} (regra de ${throttle!.requiredHours}h). Qualquer resposta do cliente libera na hora.`}
+        </p>
+      </div>
+    </div>
+  ) : null;
 
   const hasVariables = templateInfo && (
     templateInfo.headerVarCount > 0 ||
@@ -669,37 +775,78 @@ export function TemplateSelector({ conversation, onClose, onTemplateSent }: Temp
                 )}
 
                 {/* Fixed Footer */}
-                <div className="shrink-0 px-3 py-2 bg-white border-t border-slate-200 shadow-[0_-2px_8px_rgba(0,0,0,0.04)] z-20">
-                  <div className="flex items-center justify-end gap-2">
-                    <Button 
-                      variant="outline" 
-                      onClick={onClose}
-                      className="h-8 px-3 text-[11px] font-medium rounded-lg"
-                    >
-                      Cancelar
-                    </Button>
-                    <Button
-                      onClick={handleSendTemplate}
-                      disabled={sending}
-                      className="bg-blue-600 hover:bg-blue-700 text-white font-bold h-8 px-4 rounded-lg shadow-sm transition-all active:scale-95 disabled:opacity-60 flex items-center gap-1.5 text-[11px]"
-                    >
-                      {sending ? (
-                        <>
-                          <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                          <span>Enviando...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Send className="w-3 h-3" />
-                          <span>Enviar Template</span>
-                        </>
-                      )}
-                    </Button>
-                  </div>
+                <div className="shrink-0 px-3 py-2 bg-white border-t border-slate-200 shadow-[0_-2px_8px_rgba(0,0,0,0.04)] z-20 space-y-2">
+                  {throttleBanner}
+
+                  {isHardBlocked ? (
+                    /* Trava dura: oferece tirar o lead da esteira do operador */
+                    <div className="flex items-center justify-end gap-2 flex-wrap">
+                      <Button
+                        variant="outline"
+                        onClick={onClose}
+                        className="h-8 px-3 text-[11px] font-medium rounded-lg"
+                      >
+                        Cancelar
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={handleCloseConversation}
+                        disabled={actioning}
+                        className="h-8 px-3 text-[11px] font-semibold rounded-lg border-slate-300 text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 disabled:opacity-60"
+                      >
+                        <Archive className="w-3 h-3" />
+                        <span>Fechar conversa</span>
+                      </Button>
+                      <Button
+                        onClick={handleMoveToBaseFria}
+                        disabled={actioning}
+                        className="bg-sky-600 hover:bg-sky-700 text-white font-bold h-8 px-4 rounded-lg shadow-sm flex items-center gap-1.5 text-[11px] disabled:opacity-60"
+                      >
+                        <Snowflake className="w-3 h-3" />
+                        <span>Mover p/ Base Fria</span>
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-end gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={onClose}
+                        className="h-8 px-3 text-[11px] font-medium rounded-lg"
+                      >
+                        Cancelar
+                      </Button>
+                      <Button
+                        onClick={handleSendTemplate}
+                        disabled={sending || isBlocked}
+                        title={isBlocked ? 'Envio travado para este cliente' : undefined}
+                        className="bg-blue-600 hover:bg-blue-700 text-white font-bold h-8 px-4 rounded-lg shadow-sm transition-all active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5 text-[11px]"
+                      >
+                        {sending ? (
+                          <>
+                            <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                            <span>Enviando...</span>
+                          </>
+                        ) : isBlocked ? (
+                          <>
+                            <Lock className="w-3 h-3" />
+                            <span>Travado ({formatCountdown(throttle!.nextAllowedAt)})</span>
+                          </>
+                        ) : (
+                          <>
+                            <Send className="w-3 h-3" />
+                            <span>Enviar Template</span>
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </>
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-slate-50/50">
+                {throttleBanner && (
+                  <div className="w-full max-w-[320px] mb-4 text-left">{throttleBanner}</div>
+                )}
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 mb-4">
                   <FileText className="w-10 h-10 text-slate-300" />
                 </div>
