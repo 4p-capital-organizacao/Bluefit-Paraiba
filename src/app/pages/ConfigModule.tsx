@@ -231,34 +231,59 @@ export function ConfigModule() {
       const primaryUnit = editingUserUnits.find(u => u.is_primary);
       const primaryUnitId = primaryUnit?.unit_id ?? editingUserUnits[0]?.unit_id ?? null;
 
-      // Gerente: pode salvar apenas cargo e status ativo (de não-admins)
-      const updatePayload = isManager
-        ? { id_cargo: editingUser.id_cargo, ativo: editingUser.ativo }
-        : {
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+      if (!accessToken) {
+        throw new Error('Sessão expirada. Faça login novamente.');
+      }
+
+      if (isManager) {
+        // Gerente: altera apenas cargo/status, via endpoint seguro (service role +
+        // validação de hierarquia/unidade no servidor). A escrita direta em `profiles`
+        // é bloqueada pelo RLS (apenas Administrador), por isso passa pela edge function.
+        const managePayload: { id_cargo?: number; ativo: boolean } = { ativo: editingUser.ativo };
+        if (editingUser.id_cargo != null) managePayload.id_cargo = editingUser.id_cargo;
+
+        const response = await fetch(
+          `https://${projectId}.supabase.co/functions/v1/make-server-844b77a1/api/users/${editingUser.id}/manage`,
+          {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${publicAnonKey}`,
+              'apikey': publicAnonKey,
+              'X-User-Token': accessToken,
+            },
+            body: JSON.stringify(managePayload),
+          }
+        );
+
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+          throw new Error(result.error || 'Erro ao salvar alterações');
+        }
+      } else {
+        // Administrador: atualização completa direta (RLS permite) + unidades vinculadas.
+        const { data: updatedRows, error } = await supabase
+          .from('profiles')
+          .update({
             nome: editingUser.nome,
             sobrenome: editingUser.sobrenome,
             email: editingUser.email,
             id_unidade: primaryUnitId, // Sincronizar com a principal de profile_units
             id_cargo: editingUser.id_cargo,
             ativo: editingUser.ativo,
-          };
+          })
+          .eq('id', editingUser.id)
+          .select('id');
 
-      const { error } = await supabase
-        .from('profiles')
-        .update(updatePayload)
-        .eq('id', editingUser.id);
-
-      if (error) throw error;
-
-      // ── Salvar profile_units via servidor (bypassa RLS) ──
-      if (isFullAdmin) {
-        const { data: { session } } = await supabase.auth.getSession();
-        const accessToken = session?.access_token;
-
-        if (!accessToken) {
-          throw new Error('Sessão expirada. Faça login novamente.');
+        if (error) throw error;
+        // RLS pode filtrar a linha silenciosamente (0 linhas, sem erro). Detectar.
+        if (!updatedRows || updatedRows.length === 0) {
+          throw new Error('Nenhuma alteração foi salva. Verifique suas permissões.');
         }
 
+        // ── Salvar profile_units via servidor (bypassa RLS) ──
         const response = await fetch(
           `https://${projectId}.supabase.co/functions/v1/make-server-844b77a1/api/profile-units/${editingUser.id}`,
           {
@@ -274,11 +299,9 @@ export function ConfigModule() {
         );
 
         const result = await response.json();
-
         if (!response.ok || !result.success) {
           throw new Error(result.error || 'Erro ao salvar unidades vinculadas');
         }
-
       }
 
       toast.success('Usuário atualizado com sucesso');
@@ -287,7 +310,7 @@ export function ConfigModule() {
       setEditingUserUnits([]);
       await loadUsers();
     } catch (error) {
-      toast.error('Erro ao salvar alterações');
+      toast.error(error instanceof Error ? error.message : 'Erro ao salvar alterações');
     } finally {
       setSaving(false);
     }
@@ -334,12 +357,30 @@ export function ConfigModule() {
 
     setTogglingUserId(user.id);
     try {
-      const { error } = await supabase
-        .from('profiles')
-        .update({ ativo: newAtivo })
-        .eq('id', user.id);
+      // Alterar status via endpoint seguro (service role + validação no servidor).
+      // A escrita direta em `profiles` é bloqueada pelo RLS para não-Administradores.
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+      if (!accessToken) throw new Error('Sessão expirada. Faça login novamente.');
 
-      if (error) throw error;
+      const response = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/make-server-844b77a1/api/users/${user.id}/manage`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${publicAnonKey}`,
+            'apikey': publicAnonKey,
+            'X-User-Token': accessToken,
+          },
+          body: JSON.stringify({ ativo: newAtivo }),
+        }
+      );
+
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Erro ao alterar status do usuário');
+      }
 
       // Atualizar estado local imediatamente
       setUsers(prev => prev.map(u => u.id === user.id ? { ...u, ativo: newAtivo } : u));
@@ -350,7 +391,7 @@ export function ConfigModule() {
           : `${user.nome} foi desativado com sucesso`
       );
     } catch (error) {
-      toast.error('Erro ao alterar status do usuário');
+      toast.error(error instanceof Error ? error.message : 'Erro ao alterar status do usuário');
     } finally {
       setTogglingUserId(null);
     }

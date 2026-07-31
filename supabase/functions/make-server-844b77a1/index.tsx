@@ -6094,6 +6094,139 @@ app.put("/make-server-844b77a1/api/profile-units/:profileId", authMiddleware, as
 });
 
 // ========================================
+// 👥 GERENCIAR USUÁRIO (cargo / status) — GERENTE+
+// ========================================
+
+/**
+ * PATCH /api/users/:userId/manage
+ * Permite que Gerente+ altere o cargo e/ou o status (ativo) de um usuário.
+ * A escrita direta em `profiles` é bloqueada pelo RLS (apenas Administrador),
+ * então este endpoint usa service role com autorização validada no servidor.
+ *
+ * Regras:
+ *  - Administrador (level >= 5): gerencia qualquer usuário e atribui qualquer cargo.
+ *  - Gerente (level 4): apenas usuários da(s) própria(s) unidade(s); só pode
+ *    gerenciar alvos de nível INFERIOR ao seu e atribuir cargos até o próprio nível.
+ *  - Ninguém altera o próprio cargo/status por esta rota.
+ * Body: { id_cargo?: number, ativo?: boolean }
+ */
+app.patch("/make-server-844b77a1/api/users/:userId/manage", authMiddleware, async (c) => {
+  const targetUserId = c.req.param('userId');
+  const callerId = c.get('userId');
+
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const { id_cargo, ativo } = body ?? {};
+
+    if (id_cargo === undefined && ativo === undefined) {
+      return c.json({ success: false, error: 'Nada para atualizar (informe id_cargo e/ou ativo)' }, 400);
+    }
+
+    if (targetUserId === callerId) {
+      return c.json({ success: false, error: 'Você não pode alterar seu próprio cargo ou status.' }, 403);
+    }
+
+    // 1. Carregar solicitante (nível + unidade principal)
+    const { data: caller, error: callerErr } = await supabaseAdmin
+      .from('profiles')
+      .select('id, id_unidade, cargo:cargos!profiles_id_cargo_fkey(id, level)')
+      .eq('id', callerId)
+      .single();
+
+    if (callerErr || !caller) {
+      return c.json({ success: false, error: 'Perfil do solicitante não encontrado' }, 403);
+    }
+
+    const callerLevel = (caller.cargo as any)?.level ?? 0;
+    const isCallerFullAdmin = callerLevel >= 5;
+
+    // Precisa ser Gerente+ (level >= 4)
+    if (callerLevel < 4) {
+      return c.json({ success: false, error: 'Permissão insuficiente para gerenciar usuários.' }, 403);
+    }
+
+    // 2. Carregar alvo (nível + unidade)
+    const { data: target, error: targetErr } = await supabaseAdmin
+      .from('profiles')
+      .select('id, id_unidade, cargo:cargos!profiles_id_cargo_fkey(id, level)')
+      .eq('id', targetUserId)
+      .single();
+
+    if (targetErr || !target) {
+      return c.json({ success: false, error: 'Usuário alvo não encontrado' }, 404);
+    }
+
+    const targetLevel = (target.cargo as any)?.level ?? 0;
+
+    // 3. Autorização adicional para não-Administrador (Gerente)
+    if (!isCallerFullAdmin) {
+      // 3a. Alvo precisa estar em uma unidade do solicitante
+      const { data: callerUnitsData } = await supabaseAdmin
+        .from('profile_units')
+        .select('unit_id')
+        .eq('profile_id', callerId);
+
+      const callerUnitIds = new Set<number>();
+      (callerUnitsData ?? []).forEach((r: any) => {
+        if (r.unit_id != null) callerUnitIds.add(Number(r.unit_id));
+      });
+      if (caller.id_unidade != null) callerUnitIds.add(Number(caller.id_unidade));
+
+      if (target.id_unidade == null || !callerUnitIds.has(Number(target.id_unidade))) {
+        return c.json({ success: false, error: 'Você só pode gerenciar usuários da sua unidade.' }, 403);
+      }
+
+      // 3b. Não pode gerenciar alvo de nível igual ou superior ao seu
+      if (targetLevel >= callerLevel) {
+        return c.json({ success: false, error: 'Você não pode gerenciar um usuário de nível igual ou superior ao seu.' }, 403);
+      }
+
+      // 3c. Se for alterar cargo, o novo cargo não pode exceder o próprio nível
+      if (id_cargo !== undefined) {
+        const { data: newCargo, error: newCargoErr } = await supabaseAdmin
+          .from('cargos')
+          .select('id, level')
+          .eq('id', id_cargo)
+          .single();
+
+        if (newCargoErr || !newCargo) {
+          return c.json({ success: false, error: 'Cargo inválido.' }, 400);
+        }
+        if ((newCargo.level ?? 0) > callerLevel) {
+          return c.json({ success: false, error: 'Você não pode atribuir um cargo acima do seu nível.' }, 403);
+        }
+      }
+    }
+
+    // 4. Montar e aplicar update (service role — bypassa RLS)
+    const updatePayload: Record<string, any> = { updated_at: new Date().toISOString() };
+    if (id_cargo !== undefined) updatePayload.id_cargo = id_cargo;
+    if (ativo !== undefined) updatePayload.ativo = ativo;
+
+    const { data: updated, error: updateErr } = await supabaseAdmin
+      .from('profiles')
+      .update(updatePayload)
+      .eq('id', targetUserId)
+      .select('id, id_cargo, ativo')
+      .single();
+
+    if (updateErr) {
+      console.error('❌ [MANAGE_USER] Erro ao atualizar:', updateErr);
+      return c.json({ success: false, error: updateErr.message }, 500);
+    }
+
+    console.log(`✅ [MANAGE_USER] ${callerId} (level ${callerLevel}) atualizou ${targetUserId}`, updatePayload);
+    return c.json({ success: true, user: updated });
+  } catch (error) {
+    console.error('❌ [MANAGE_USER] Exceção:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Erro ao gerenciar usuário',
+    }, 500);
+  }
+});
+
+// ========================================
 // 🚀 START SERVER
 // ========================================
 
