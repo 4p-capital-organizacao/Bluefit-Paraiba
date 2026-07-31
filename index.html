@@ -1,15 +1,18 @@
+<!DOCTYPE html>
+<html lang="pt-BR" translate="no">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- O app é 100% em pt-BR. A tradução automática do Chrome reescreve os nós
+         de texto (envolvendo em <font>), o React perde a referência ao nó e
+         quebra com "Failed to execute 'removeChild' on 'Node'" ao desmontar
+         componentes — ex.: ao fechar o Select de unidades no cadastro. -->
+    <meta name="google" content="notranslate" />
+    <title>Bluefit Paraíba</title>
+  </head>
 
-  <!DOCTYPE html>
-  <html lang="en">
-    <head>
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>Bluefit Paraíba</title>
-    </head>
-
-    <body>
-      <div id="root"></div>
-      <script type="module" src="/src/main.tsx"></script>
-    </body>
-  </html>
-  
+  <body class="notranslate">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
