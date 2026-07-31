@@ -6227,6 +6227,125 @@ app.patch("/make-server-844b77a1/api/users/:userId/manage", authMiddleware, asyn
 });
 
 // ========================================
+// ✉️ ALTERAR EMAIL (auth + profiles) — ADMINISTRADOR
+// ========================================
+
+/**
+ * PATCH /api/users/:userId/email
+ * Altera o email de um usuário mantendo `auth.users.email` (usado para login e
+ * para o envio de emails) e `profiles.email` (exibido na plataforma) em sincronia.
+ *
+ * Antes deste endpoint a tela de edição gravava apenas em `profiles`, e o Auth
+ * ficava com o endereço antigo. O "esqueci minha senha" era então pedido para um
+ * email inexistente no Auth e o GoTrue responde HTTP 200 sem enviar nada
+ * (proteção anti-enumeração): a UI dizia "email enviado" e o link nunca chegava.
+ *
+ * Body: { email: string }
+ */
+app.patch("/make-server-844b77a1/api/users/:userId/email", authMiddleware, async (c) => {
+  const targetUserId = c.req.param('userId');
+  const callerId = c.get('userId');
+
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const email = (typeof body?.email === 'string' ? body.email : '').trim().toLowerCase();
+
+    if (!email) {
+      return c.json({ success: false, error: 'Email é obrigatório.' }, 400);
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return c.json({ success: false, error: 'Email inválido.' }, 400);
+    }
+
+    // 1. Apenas Administrador (level >= 5). O campo Email da tela só é exibido
+    //    para Administrador, então o servidor aplica a mesma regra.
+    const { data: caller, error: callerErr } = await supabaseAdmin
+      .from('profiles')
+      .select('id, cargo:cargos!profiles_id_cargo_fkey(id, level)')
+      .eq('id', callerId)
+      .single();
+
+    if (callerErr || !caller) {
+      return c.json({ success: false, error: 'Perfil do solicitante não encontrado' }, 403);
+    }
+    if (((caller.cargo as any)?.level ?? 0) < 5) {
+      return c.json({ success: false, error: 'Apenas Administradores podem alterar o email de um usuário.' }, 403);
+    }
+
+    // 2. Alvo precisa existir dos dois lados
+    const { data: target, error: targetErr } = await supabaseAdmin
+      .from('profiles')
+      .select('id, email')
+      .eq('id', targetUserId)
+      .single();
+
+    if (targetErr || !target) {
+      return c.json({ success: false, error: 'Usuário alvo não encontrado' }, 404);
+    }
+
+    const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.getUserById(targetUserId);
+    if (authErr || !authData?.user) {
+      return c.json({ success: false, error: 'Usuário não encontrado no Auth.' }, 404);
+    }
+
+    const previousAuthEmail = authData.user.email ?? null;
+
+    // Já sincronizado nos dois lados — nada a fazer.
+    if (previousAuthEmail?.toLowerCase() === email && (target.email ?? '').toLowerCase() === email) {
+      return c.json({ success: true, email, unchanged: true });
+    }
+
+    // 3. Auth primeiro: é a fonte de verdade do login. `email_confirm: true`
+    //    marca o novo endereço como confirmado — sem isso o usuário ficaria
+    //    esperando um email de confirmação, que é o ponto de falha que este
+    //    endpoint existe para eliminar.
+    const { error: updateAuthErr } = await supabaseAdmin.auth.admin.updateUserById(targetUserId, {
+      email,
+      email_confirm: true,
+    });
+
+    if (updateAuthErr) {
+      console.error('❌ [CHANGE_EMAIL] Falha ao atualizar o Auth:', updateAuthErr.message);
+      const jaEmUso = /already|registered|exists|duplicate/i.test(updateAuthErr.message);
+      return c.json({
+        success: false,
+        error: jaEmUso ? 'Este email já está em uso por outro usuário.' : updateAuthErr.message,
+      }, jaEmUso ? 409 : 500);
+    }
+
+    // 4. Espelhar em profiles. Se falhar, reverter o Auth — deixar os dois lados
+    //    divergentes recriaria exatamente o bug que estamos corrigindo.
+    const { error: profileErr } = await supabaseAdmin
+      .from('profiles')
+      .update({ email, updated_at: new Date().toISOString() })
+      .eq('id', targetUserId);
+
+    if (profileErr) {
+      console.error('❌ [CHANGE_EMAIL] Falha em profiles, revertendo o Auth:', profileErr.message);
+      if (previousAuthEmail) {
+        const { error: rollbackErr } = await supabaseAdmin.auth.admin.updateUserById(targetUserId, {
+          email: previousAuthEmail,
+          email_confirm: true,
+        });
+        if (rollbackErr) {
+          console.error('🚨 [CHANGE_EMAIL] Rollback do Auth FALHOU. Auth e profiles estão dessincronizados para', targetUserId, rollbackErr.message);
+        }
+      }
+      return c.json({ success: false, error: 'Não foi possível salvar o email. Nenhuma alteração foi aplicada.' }, 500);
+    }
+
+    console.log(`✅ [CHANGE_EMAIL] ${callerId} alterou o email de ${targetUserId}: ${previousAuthEmail} → ${email}`);
+    return c.json({ success: true, email, previousEmail: previousAuthEmail });
+  } catch (error) {
+    console.error('❌ [CHANGE_EMAIL] Exceção:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Erro ao alterar o email',
+    }, 500);
+  }
+});
+
+// ========================================
 // 🚀 START SERVER
 // ========================================
 

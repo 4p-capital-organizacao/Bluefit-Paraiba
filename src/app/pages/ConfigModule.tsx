@@ -71,6 +71,9 @@ export function ConfigModule() {
   const [units, setUnits] = useState<Unit[]>([]);
   const [cargos, setCargos] = useState<Cargo[]>([]);
   const [editingUser, setEditingUser] = useState<Profile | null>(null);
+  // Email de quando o modal abriu — usado para só chamar o endpoint de troca de
+  // email (que mexe no Auth) quando o campo realmente mudou.
+  const [originalEmail, setOriginalEmail] = useState('');
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [saving, setSaving] = useState(false);
   const [collapsedUnits, setCollapsedUnits] = useState<Set<string>>(new Set());
@@ -210,6 +213,7 @@ export function ConfigModule() {
 
   function handleEditUser(user: Profile) {
     setEditingUser({ ...user });
+    setOriginalEmail(user.email ?? '');
     setShowEditDialog(true);
     loadUserUnits(user.id, user.id_unidade);
   }
@@ -263,13 +267,43 @@ export function ConfigModule() {
           throw new Error(result.error || 'Erro ao salvar alterações');
         }
       } else {
+        // ── Email: alterado via servidor, ANTES do resto ──
+        // O email precisa mudar em `auth.users` (login e envio de emails) e em
+        // `profiles` (exibição) ao mesmo tempo. Gravar só em `profiles` deixava o
+        // Auth com o endereço antigo e o "esqueci minha senha" falhava em silêncio.
+        // Vai primeiro para que, se o email for recusado, nada mais seja alterado.
+        const novoEmail = (editingUser.email ?? '').trim();
+        const emailMudou = novoEmail.toLowerCase() !== originalEmail.trim().toLowerCase();
+
+        if (emailMudou) {
+          const emailResponse = await fetch(
+            `https://${projectId}.supabase.co/functions/v1/make-server-844b77a1/api/users/${editingUser.id}/email`,
+            {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${publicAnonKey}`,
+                'apikey': publicAnonKey,
+                'X-User-Token': accessToken,
+              },
+              body: JSON.stringify({ email: novoEmail }),
+            }
+          );
+
+          const emailResult = await emailResponse.json();
+          if (!emailResponse.ok || !emailResult.success) {
+            throw new Error(emailResult.error || 'Erro ao alterar o email');
+          }
+        }
+
         // Administrador: atualização completa direta (RLS permite) + unidades vinculadas.
+        // `email` fica de fora: já foi tratado acima pelo endpoint, que mantém
+        // `auth.users` e `profiles` em sincronia.
         const { data: updatedRows, error } = await supabase
           .from('profiles')
           .update({
             nome: editingUser.nome,
             sobrenome: editingUser.sobrenome,
-            email: editingUser.email,
             id_unidade: primaryUnitId, // Sincronizar com a principal de profile_units
             id_cargo: editingUser.id_cargo,
             ativo: editingUser.ativo,
@@ -307,6 +341,7 @@ export function ConfigModule() {
       toast.success('Usuário atualizado com sucesso');
       setShowEditDialog(false);
       setEditingUser(null);
+      setOriginalEmail('');
       setEditingUserUnits([]);
       await loadUsers();
     } catch (error) {
@@ -938,6 +973,9 @@ export function ConfigModule() {
                       onChange={(e) => setEditingUser({ ...editingUser, email: e.target.value })}
                       className="bg-white border-[#E5E7EB] focus:border-[#0023D5] focus:ring-2 focus:ring-[#0023D5]/10"
                     />
+                    <p className="text-xs text-[#6B7280]">
+                      Este é o email de login do usuário e o destino do link de redefinição de senha.
+                    </p>
                   </div>
 
                   {/* ── Unidades vinculadas (multi-unidade) ── */}
