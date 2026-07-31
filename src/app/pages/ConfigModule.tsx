@@ -831,8 +831,8 @@ export function ConfigModule() {
 
       {/* ═══════════ EDIT USER DIALOG ═══════════ */}
       <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
-        <DialogContent className="sm:max-w-[500px]">
-          <DialogHeader>
+        <DialogContent className="sm:max-w-[500px] flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0">
+          <DialogHeader className="shrink-0 px-6 pt-6 pb-2">
             <DialogTitle className="text-xl font-bold flex items-center gap-2">
               <div
                 className="w-8 h-8 rounded-lg flex items-center justify-center"
@@ -861,7 +861,7 @@ export function ConfigModule() {
               const canToggleStatus = isFullAdmin || (isManager && !isSelf && !isTargetAdmin);
 
               return (
-            <div className="space-y-4 py-4">
+            <div className="flex-1 min-h-0 space-y-4 overflow-y-auto px-6 py-4">
               {/* Banner de restrição quando Gerente visualiza Admin */}
               {isManagerEditingAdmin && (
                 <div className="flex items-start gap-2.5 px-4 py-3 rounded-lg bg-[#FEF2F2] border border-[#FECACA]">
@@ -1114,7 +1114,7 @@ export function ConfigModule() {
 
           {/* Dialog Footer — Salvar / Cancelar */}
           {editingUser && (
-            <div className="flex items-center justify-end gap-2 pt-4 border-t border-[#E5E7EB]">
+            <div className="shrink-0 flex items-center justify-end gap-2 border-t border-[#E5E7EB] bg-white px-6 py-4">
               <Button
                 onClick={() => {
                   setShowEditDialog(false);
